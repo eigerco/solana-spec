@@ -4,6 +4,16 @@ Solana nodes use gossip protocol to communicate with each other. Communication i
 
 ## Data management in gossip service
 
+```mermaid
+flowchart TD
+  A(Receive data over UDP sockets) --> B(Consume packets)
+  B --> C(Process packets)
+  C --> D(Send messages & responses over UDP sockets)
+
+  E(Gossip loop running in background) --> D
+  E --> E
+```
+
 Managing of data is divided into several steps:
 
 1. Data is received over UDP sockets - data is gathered in a batch and processed further
@@ -15,7 +25,7 @@ Managing of data is divided into several steps:
 * prune message
 * ping message
 * pong message
-4. Gossip logic is running in the background thread - it generates push & pull messages and pings which are sent to peers. 
+4. Gossip loop is running in the background thread - it generates push & pull messages and pings which are sent to peers. 
 5. Sending responses over sockets. 
 
 Each of the above steps run in separate threads. Communication between them is performed via `crossbeam-channel` crate. It provides a thread-safe multi-consumer multi-producer channels for message passing.
@@ -87,7 +97,7 @@ Contains nodes public key, shred version, wallclock and socket addresses for dif
 * shred_version - the shred version node has been configured to use
 
 ```rust
-pub struct LegacyContactInfo {
+struct LegacyContactInfo {
     id: Pubkey,
     gossip: SocketAddr,
     tvu: SocketAddr,
@@ -103,16 +113,22 @@ pub struct LegacyContactInfo {
     shred_version: u16,
 }
 ```
+Nodes send this message to introduce themselves and provide all ports that can be used by other peers to communicate with them.
 
 #### `Vote`
+```rust
+Vote(VoteIndex, Vote)
+```
 Contains a one byte index and a `Vote` structure:
  - from - public key of origin
  - transaction - an atomically-committed sequence of instructions
  - wallclock - timestamp of data creation
- - slot - the unit of time givent to a leader for encoding a block, it is actually an `u64` type
+ - slot - the unit of time given to a leader for encoding a block, it is actually an `u64` type
 
  ```rust
- pub struct Vote {
+ type VoteIndex = u8;
+
+ struct Vote {
     from: Pubkey,
     transaction: Transaction,
     wallclock: u64,
@@ -121,6 +137,9 @@ Contains a one byte index and a `Vote` structure:
  ```
 
 #### `LowestSlot`
+```rust
+LowestSlot(u8, LowestSlot)
+```
 Contains a one byte index (deprecated) and a `LowestSlot` structure:
 - from - public key of origin
 - root - deprecated
@@ -130,7 +149,7 @@ Contains a one byte index (deprecated) and a `LowestSlot` structure:
 - wallclock - timestamp of data creation
 
 ```rust
-pub struct LowestSlot {
+struct LowestSlot {
     from: Pubkey,
     root: Slot,
     lowest: Slot,
@@ -148,7 +167,8 @@ Contains:
 
 ```rust
 type LegacySnapshotHashes = AccountsHashes;
-pub struct `AccountsHashes` {
+
+struct AccountsHashes {
     from: Pubkey,
     hashes: Vec<(Slot, Hash)>,
     wallclock: u64,
@@ -156,13 +176,18 @@ pub struct `AccountsHashes` {
 ```
 
 #### `EpochSlots`
+```rust
+EpochSlots(EpochSlotsIndex, EpochSlots)
+```
 Contains a one byte index and a `EpochSlots` structure:
 - from - public key of origin
-- slots - ??
+- slots - 
 - wallclock - timestamp of data creation
 
 ```rust
-pub struct EpochSlots {
+type EpochSlotsIndex = u8;
+
+struct EpochSlots {
     from: Pubkey,
     slots: Vec<CompressedSlots>,
     wallclock: u64,
@@ -174,7 +199,7 @@ pub struct EpochSlots {
 - wallclock - timestamp of data creation
 - version - older version of the Solana used earlier 1.3.x releases
 ```rust
-pub struct LegacyVersion {
+struct LegacyVersion {
     from: Pubkey,
     wallclock: u64,
     version: solana_version::LegacyVersion1,
@@ -186,7 +211,7 @@ pub struct LegacyVersion {
 - wallclock - timestamp of data creation
 - version - version of the Solana
 ```rust
-pub struct Version {
+struct Version {
     from: Pubkey,
     wallclock: u64,
     version: solana_version::LegacyVersion2,
@@ -199,7 +224,7 @@ pub struct Version {
 - timestamp - when the instance was created
 - token - randomly generated value at node instantiation.
 ```rust
-pub struct NodeInstance {
+struct NodeInstance {
     from: Pubkey,
     wallclock: u64,
     timestamp: u64,
@@ -208,12 +233,17 @@ pub struct NodeInstance {
 ```
 
 #### `DuplicateShred`
+```rust
+DuplicateShred(DuplicateShredIndex, DuplicateShred)
+```
 Contains a 2 byte index and `DuplicateShred` structure:
 - from - public key of origin
 - wallclock - timestamp of data creation
 - slot - unit of time for encoding a block
 ```rust
-pub struct DuplicateShred {
+type DuplicateShredIndex = u16
+
+struct DuplicateShred {
     from: Pubkey,
     wallclock: u64,
     slot: Slot,
@@ -232,7 +262,7 @@ pub struct DuplicateShred {
 - incremental - 
 - wallclock - timestamp of data creation
 ```rust
-pub struct SnapshotHashes {
+struct SnapshotHashes {
     from: Pubkey,
     full: (Slot, Hash),
     incremental: Vec<(Slot, Hash)>,
@@ -243,15 +273,15 @@ pub struct SnapshotHashes {
 #### `ContactInfo`
 - pubkey - public key of origin
 - wallclock - timestamp of data creation
-- outset - 
+- outset - timestamp when node instance was first created
 - shred_version - the shred version node has been configured to use
 - version - Solana version
 - addrs - list of unique IP addresses
 - sockets - list of nique sockets
-- extensions - 
-- cache - 
+- extensions - future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused
+- cache - cache of nodes socket addresses
 ```rust
-pub struct ContactInfo {
+struct ContactInfo {
     pubkey: Pubkey,
     wallclock: u64,
     outset: u64,
@@ -272,7 +302,7 @@ pub struct ContactInfo {
 - last_voted_hash - 
 - shred_version - the shred version node has been configured to use
 ```rust
-pub struct RestartLastVotedForkSlots {
+struct RestartLastVotedForkSlots {
     from: Pubkey,
     wallclock: u64,
     offsets: SlotsOffsets,
@@ -290,7 +320,7 @@ pub struct RestartLastVotedForkSlots {
 - observed_stake - 
 - shred_version - the shred version node has been configured to use
 ```rust
-pub struct RestartHeaviestFork {
+struct RestartHeaviestFork {
     from: Pubkey,
     wallclock: u64,
     last_slot: Slot,
@@ -347,7 +377,63 @@ Only successfully verified packets are processed in the next step.
 
 ### Processing packets
 
+Packets are filtered by shred version - only packets from origin with the same shred version as processing node are retained. There are 3 data types that are always retained too - `ContactInfo`, `LegacyContactInfo` and `NodeInstance`. 
+
+#### Processing pull requests
+
+* Self pull requests are ignored. 
+* Values are filtered - in case of duplicates, only the most recent ones are kept
+* Values are inserted into `crds`
+* Pull requests are checked if coming from a valid address and if the address has responded to a ping request, also returns ping packets for address that need to be pinged
+* Pull responses are generated:
+  * wallclock is checked for each pull request - too old filters are skipped
+  * `crds` values are filtered out using filters from pull requests, too new values are also filtered out
+  * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
+
+#### Processing pull responses
+
+Pull responses are divided into 3 lists by their timestamps:
+* responses either don't exist in nodes `crds` or have newer timestamps - these are inserted into `crds`, their owners timestamps are updated
+* responses with older values - these are also inserted, but their owners timestamps are not updated
+* hash values of outdated values which failed to be insterted
+
+#### Processing push messages
+* values not too old and not existing in `crds` are inserted
+* in case value type is `LegacyContactInfo` - node info and its shred version are stored
+* in case value already exists in `crds` it is checked for duplication - if value has newer timestamp it is updated
+* for each origin of the push message a list of its peers is checked - peers with too low stake will be pruned (https://github.com/solana-labs/solana/issues/3214)
+* for each origin prune messages are generated and sent
+* push messages are broadcasted further to node peers - peers are randomly selected such that they have not pruned source addresses of the messages
+  * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
+
+#### Processing prune messages
+* only mesages not older than specified timeout are processed
+* each entry from the list of prunes is added to the bloom filter - no more push messages from such nodes will be sent to their peers
+
+#### Processing ping messages
+
+For each ping a new pong message is created. These are then sent back to origins.
+
+#### Processing pong messages
+
+Each pong message is stored in a ping cache. 
+
 ### Gossip loop
+
+```mermaid
+flowchart TB
+  A(Send PushRequests: Version, NodeInstance) --> C(Generate push messages)
+  subgraph Gossip loop
+  C --> D(Generate pull requests)
+  D --> E(Generate ping messages)
+  E --> F(Send generated messages)
+  end
+  F --> a1
+  subgraph Every 7500ms
+  a1(Send PushRequests: Version, ContactInfo, LegacyContactInfo) --> a2(Refresh active set of nodes)
+  end
+  a2 --> C
+```
 
 The gossip loop runs in a separate thread. Each iteration the following steps are performed:
 
@@ -390,3 +476,5 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
     * from each gossip address only nodes with highest stake are kept in the list
     * set of active nodes is rotated (*find out how!*)
     * pings are sent
+
+
