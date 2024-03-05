@@ -1,38 +1,52 @@
 # Gossip protocol
 
-Solana nodes use gossip protocol to communicate with each other. Communication is performed via UDP sockets. Each node can be started either in `gossip` or `spy` mode. In the first case it binds to a specified socket and fully participates in gossip. In the latter case it binds to a random UDP port from range 8000-10000 and spies on gossip via pull requests.
+This document describes the gossip protocol without implementation details which can be found [here](/implementation-details.md).
 
-## Data management in gossip service
-
-```mermaid
-flowchart TD
-  A(Receive data over UDP sockets) --> B(Consume packets)
-  B --> C(Process packets)
-  C --> D(Send messages & responses over UDP sockets)
-
-  E(Gossip loop running in background) --> D
-  E --> E
-```
-
-Managing of data is divided into several steps:
-
-1. Data is received over UDP sockets - data is gathered in a batch and processed further
-2. Consuming of the packets - data is deserialized, sanitized and verified before processing
-3. Processing of the packets - based on the protocol type data is handled in a different way. The gossip protocol defines following types of messages:
+Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which each node need to deserialize. There are 6 types of messages specified:
 * pull request
 * pull response
 * push message
 * prune message
-* ping message
-* pong message
-4. Gossip loop is running in the background thread - it generates push & pull messages and pings which are sent to peers. 
-5. Sending responses over sockets. 
+* ping
+* pong
 
-Each of the above steps run in separate threads. Communication between them is performed via `crossbeam-channel` crate. It provides a thread-safe multi-consumer multi-producer channels for message passing.
+Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`) which is synchronized between them via pull requests, push messages and pull responses.
 
-### Data protocol
+### Message format
 
-Data sent in the packets is defined as:
+Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). Apart from the data byte array packet contains additional metadata:
+
+ * size - size of the packet
+ * addr - address of the origin
+ * port - port of the origin
+ * flags - additional flags
+
+```rust
+struct Packet {
+    buffer: [u8; 1232],
+    meta: Meta,
+}
+
+struct Meta {
+    pub size: usize,
+    pub addr: IpAddr,
+    pub port: u16,
+    pub flags: PacketFlags,
+}
+
+struct PacketFlags: u8 {
+    const DISCARD        = 0b0000_0001;
+    const FORWARDED      = 0b0000_0010;
+    const REPAIR         = 0b0000_0100;
+    const SIMPLE_VOTE_TX = 0b0000_1000;
+    const TRACER_PACKET  = 0b0001_0000;
+    const ROUND_COMPUTE_UNIT_PRICE = 0b0010_0000;
+}
+```
+
+#### `Protocol`
+
+Data sent in the message is serialized from a type:
 ``` rust
 enum Protocol {
   PullRequest(CrdsFilter, CrdsValue),
@@ -45,56 +59,120 @@ enum Protocol {
 ```
 
 where:
-* `PullRequest` - is sent by node to ask the cluster for new information. It is sent to a single peer selected randomly and contains a bloom filter that represents things node already has. Pull requests contain two values:
-  * a filter used for data filtering
-  * a value, usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.)
-* `PullResponse` - these are sent in response to `PullRequest` and contain a public key of sending node and a list of new values. They are filtered and divided into 3 groups by receiving node:
-  * responses that update owner timestamp
-  * responses that don't update it
-  * hash values of outdated values which failed to be inserted
-Finally pull responses are inserted into `crds`.
-* `PushMessage` - it is sent by nodes who want to share information with others. They contain a public key of sending node and list of values. Node receiving the message checks for:
+* `PullRequest` - is sent by node to ask the cluster for new information, contains two values:
+  * `CrdsFilter` - a bloom filter representing things node already has
+  * `CrdsValue` - a [value](#crdsvalue), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.)
+* `PullResponse` - these are sent in response to `PullRequest` and contain:
+  * `Pubkey` - a public key of the origin
+  * `Vec<CrdsValue>` - a list of new values 
+* `PushMessage` - it is sent by nodes who want to share information with others. They contain:
+  *  `Pubkey` - a public key of the origin
+  * `Vec<CrdsValue>` - list of values to share
+   <!-- Node receiving the message checks for:
     - duplication - duplicated messages are dropped, node response with prune message if message came from low staked node
     - new data:
         - new information is stored in `crds` and replaces old value
         - stores message in `pushed_once` which is used for detecting duplicates
         - retransmits information to its peers
-    - expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped
-* `PruneMessage` - only messages that didn’t time out and are destined to the node are processed - origin of the message is added into bloom filter and node drops it. Prune is an indication that there is another, higher stake weighted path to that node other than direct push (*improve this!*)
-* `PingMessage` - nodes are sending ping messages from time to time to other nodes to check whether they are active. `PingMessage` contains a 32 bytes token generated by the origin.
-* `PongMessage` - sent by node as a response to `PingMessage` - contains public key of sending node, its signature and hash of the token sent in `PingMessage`.
+    - expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped -->
+* `PruneMessage` - it is sent to peers with a list of nodes that should be pruned
+  * `Pubkey` - a public key of the origin
+  * `PruneData` - contains a [list of pruned nodes](#prunedata)
+* `PingMessage` - nodes are sending [ping](#ping) messages from time to time to other nodes to check whether they are active. `PingMessage` contains a 32 bytes token generated by the origin.
+* `PongMessage` - sent by node as a [response](#pong) to `PingMessage` - contains public key of sending node, its signature and hash of the token sent in `PingMessage`.
 
-Values sent in messages contain signature and `CrdsData` which can be one of:
-* `LegacyContactInfo`
-* `Vote`
-* `LowestSlot`
-* `LegacySnapshotHashes`
-* `AccountsHashes`
-* `EpochSlots`
-* `LegacyVersion`
-* `Version`
-* `NodeInstance`
-* `DuplicateShred`
-* `SnapshotHashes`
-* `ContactInfo`
-* `RestartLastVotedForkSlots`
-* `RestartHeaviestFork`
+
+#### `PruneData`
+This structure defines a prune message sent by nodes:
+- pubkey - public key of the origin
+- prunes - public keys of nodes that should be pruned
+- signature - signature of this message
+- destination - a public key of the destination node of this message
+- wallclock - wallclock of the node that generated that message
+```rust
+struct PruneData {
+    pubkey: Pubkey,
+    prunes: Vec<Pubkey>,
+    signature: Signature,
+    destination: Pubkey,
+    wallclock: u64,
+}
+```
+
+#### `Ping`
+Ping structure contains:
+- from - public key of the origin
+- token - 32 bytes token
+- signature - signature of the message
+
+```rust
+struct Ping<T> {
+    from: Pubkey,
+    token: T,
+    signature: Signature,
+}
+
+type Ping = Ping<[u8; 32]>;
+```
+
+#### `Pong`
+Pong structure contains:
+- from - public key of the origin
+- hash - hash of the received ping token
+- signature - signature of the message
+
+```rust
+struct Pong {
+    from: Pubkey,
+    hash: Hash,
+    signature: Signature,
+}
+```
+
+#### `CrdsValue`
+Values that are sent in push messages, pull requests & pull responses contain signature and data:
+```rust
+struct CrdsValue {
+    pub signature: Signature,
+    pub data: CrdsData,
+}
+```
+
+where `CrdsData` is defined as:
+```rust
+enum CrdsData {
+    LegacyContactInfo(LegacyContactInfo),
+    Vote(VoteIndex, Vote),
+    LowestSlot(u8, LowestSlot),
+    LegacySnapshotHashes(LegacySnapshotHashes),
+    AccountsHashes(AccountsHashes),
+    EpochSlots(EpochSlotsIndex, EpochSlots),
+    LegacyVersion(LegacyVersion),
+    Version(Version),
+    NodeInstance(NodeInstance),
+    DuplicateShred(DuplicateShredIndex, DuplicateShred),
+    SnapshotHashes(SnapshotHashes),
+    ContactInfo(ContactInfo),
+    RestartLastVotedForkSlots(RestartLastVotedForkSlots),
+    RestartHeaviestFork(RestartHeaviestFork),
+}
+```
 
 #### `LegacyContactInfo`
-Contains nodes public key, shred version, wallclock and socket addresses for different protocols:
-* id - public key of origin
-* gossip - gossip protocol address
-* tvu - address to connect to for replication
-* tvu quic - TVU over QUIC protocol
-* serve repair quic - repair service for QUIC protocol
-* tpu - transactions address
-* tpu forwards - address to forward unprocessed replications
-* tpu vote - address for bank state requests
-* rpc - address for JSON-RPC requests
-* rpc pubsub - websocket for JSON-RPC push notifications
-* serve repair - address for send repair requests
-* wallclock - timestamp of data creation
-* shred_version - the shred version node has been configured to use
+Basic info about the node. Nodes send this message to introduce themselves and provide all ports that can be used by other peers to communicate with them:
+- id - public key of origin
+- gossip - gossip protocol address
+- tvu - address to connect to for replication
+- tvu quic - TVU over QUIC protocol
+- serve repair quic - repair service for QUIC protocol
+- tpu - transactions address
+- tpu forwards - address to forward unprocessed replications
+- tpu vote - address for bank state requests
+- rpc - address for JSON-RPC requests
+- rpc pubsub - websocket for JSON-RPC push notifications
+- serve repair - address for send repair requests
+- wallclock - wallclock of the node that generated that message
+- shred_version - the shred version node has been configured to use
 
 ```rust
 struct LegacyContactInfo {
@@ -113,7 +191,6 @@ struct LegacyContactInfo {
     shred_version: u16,
 }
 ```
-Nodes send this message to introduce themselves and provide all ports that can be used by other peers to communicate with them.
 
 #### `Vote`
 ```rust
@@ -122,7 +199,7 @@ Vote(VoteIndex, Vote)
 Contains a one byte index and a `Vote` structure:
  - from - public key of origin
  - transaction - an atomically-committed sequence of instructions
- - wallclock - timestamp of data creation
+ - wallclock - wallclock of the node that generated that message
  - slot - the unit of time given to a leader for encoding a block, it is actually an `u64` type
 
  ```rust
@@ -146,7 +223,7 @@ Contains a one byte index (deprecated) and a `LowestSlot` structure:
 - lowest - unit of time for encoding a block
 - slots - deprecated
 - stash - deprecated
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 
 ```rust
 struct LowestSlot {
@@ -160,10 +237,9 @@ struct LowestSlot {
 ```
 
 #### `LegacySnapshotHashes`, `AccountsHashes`
-Contains:
 - from - public key of origin
 - hashes - a list of slots and hashes
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 
 ```rust
 type LegacySnapshotHashes = AccountsHashes;
@@ -182,7 +258,7 @@ EpochSlots(EpochSlotsIndex, EpochSlots)
 Contains a one byte index and a `EpochSlots` structure:
 - from - public key of origin
 - slots - 
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 
 ```rust
 type EpochSlotsIndex = u8;
@@ -196,7 +272,7 @@ struct EpochSlots {
 
 #### `LegacyVersion`
 - from - public key of origin
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 - version - older version of the Solana used earlier 1.3.x releases
 ```rust
 struct LegacyVersion {
@@ -207,8 +283,9 @@ struct LegacyVersion {
 ```
 
 #### `Version`
+Version of Solana client the node is using
 - from - public key of origin
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 - version - version of the Solana
 ```rust
 struct Version {
@@ -219,8 +296,9 @@ struct Version {
 ```
 
 #### `NodeInstance`
+Contains node creation timestamp and randomly generated token:
 - from - public key of origin
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 - timestamp - when the instance was created
 - token - randomly generated value at node instantiation.
 ```rust
@@ -238,7 +316,7 @@ DuplicateShred(DuplicateShredIndex, DuplicateShred)
 ```
 Contains a 2 byte index and `DuplicateShred` structure:
 - from - public key of origin
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 - slot - unit of time for encoding a block
 ```rust
 type DuplicateShredIndex = u16
@@ -260,7 +338,7 @@ struct DuplicateShred {
 - from - public key of origin
 - full - 
 - incremental - 
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 ```rust
 struct SnapshotHashes {
     from: Pubkey,
@@ -272,7 +350,7 @@ struct SnapshotHashes {
 
 #### `ContactInfo`
 - pubkey - public key of origin
-- wallclock - timestamp of data creation
+- wallclock - wallclock of the node that generated that message
 - outset - timestamp when node instance was first created
 - shred_version - the shred version node has been configured to use
 - version - Solana version
@@ -329,152 +407,3 @@ struct RestartHeaviestFork {
     shred_version: u16,
 }
 ```
-
-
-### Receiving data 
-
-Packet receiver thread binds to a socket on address 0.0.0.0 and specified port in case of running in `gossip` mode or on at random port in 8000-10000 range in case of `spy` mode. Packets are collected into a packet batch that is sent via `crossbeam-channel` for further processing. 
-
-Each packet is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). Apart from the data byte array packet contains additional metadata which contains:
-
- * size of the packet
- * address of the origin
- * port
- * flags, which can be one of:
-    * DISCARD - `0b0000_0001`
-    * FORWARDED - `0b0000_0010`
-    * REPAIR - `0b0000_0100`
-    * SIMPLE_VOTE_TX - `0b0000_1000`
-    * TRACER_PACKET - `0b0001_0000`
-    * ROUND_COMPUTE_UNIT_PRICE - `0b0010_0000`
-
-### Consuming packets
-
-Data packets are being checked before further processing. First packets are deserialized from the binary form into a `Protocol` type and then sanitized and verified.
-
-#### Deserialization 
-
-Packets are deserialized into a `Protocol` type defined above.
-
-#### Data sanitization
-
-Sanitization excludes signature-verification checks as these are performed in the next step. Sanitize check should include but are not limited to:
-
-* all index values are in range
-* all values are within their static min/max bounds
-
-#### Data verification
-
-Verification is handled differently according to type of the message:
-
-* pull request - public key of the incoming value is verified,
-* pull response, push message - each value from the incoming array is verified as above, only verified values are processed further
-* prune message - public key of the incoming value is verified,
-* ping - token is verified
-* pong - hash of received ping token is verified
-
-Only successfully verified packets are processed in the next step.
-
-### Processing packets
-
-Packets are filtered by shred version - only packets from origin with the same shred version as processing node are retained. There are 3 data types that are always retained too - `ContactInfo`, `LegacyContactInfo` and `NodeInstance`. 
-
-#### Processing pull requests
-
-* Self pull requests are ignored. 
-* Values are filtered - in case of duplicates, only the most recent ones are kept
-* Values are inserted into `crds`
-* Pull requests are checked if coming from a valid address and if the address has responded to a ping request, also returns ping packets for address that need to be pinged
-* Pull responses are generated:
-  * wallclock is checked for each pull request - too old filters are skipped
-  * `crds` values are filtered out using filters from pull requests, too new values are also filtered out
-  * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
-
-#### Processing pull responses
-
-Pull responses are divided into 3 lists by their timestamps:
-* responses either don't exist in nodes `crds` or have newer timestamps - these are inserted into `crds`, their owners timestamps are updated
-* responses with older values - these are also inserted, but their owners timestamps are not updated
-* hash values of outdated values which failed to be insterted
-
-#### Processing push messages
-* values not too old and not existing in `crds` are inserted
-* in case value type is `LegacyContactInfo` - node info and its shred version are stored
-* in case value already exists in `crds` it is checked for duplication - if value has newer timestamp it is updated
-* for each origin of the push message a list of its peers is checked - peers with too low stake will be pruned (https://github.com/solana-labs/solana/issues/3214)
-* for each origin prune messages are generated and sent
-* push messages are broadcasted further to node peers - peers are randomly selected such that they have not pruned source addresses of the messages
-  * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
-
-#### Processing prune messages
-* only mesages not older than specified timeout are processed
-* each entry from the list of prunes is added to the bloom filter - no more push messages from such nodes will be sent to their peers
-
-#### Processing ping messages
-
-For each ping a new pong message is created. These are then sent back to origins.
-
-#### Processing pong messages
-
-Each pong message is stored in a ping cache. 
-
-### Gossip loop
-
-```mermaid
-flowchart TB
-  A(Send PushRequests: Version, NodeInstance) --> C(Generate push messages)
-  subgraph Gossip loop
-  C --> D(Generate pull requests)
-  D --> E(Generate ping messages)
-  E --> F(Send generated messages)
-  end
-  F --> a1
-  subgraph Every 7500ms
-  a1(Send PushRequests: Version, ContactInfo, LegacyContactInfo) --> a2(Refresh active set of nodes)
-  end
-  a2 --> C
-```
-
-The gossip loop runs in a separate thread. Each iteration the following steps are performed:
-
-* before loop starts node send a push message containing `Version` and `NodeInstance`
-* push messages are generated:
-  * all entries from `crds` with timestamps inside current wallclock window are gathered 
-  * for each entry nodes from active set are collected; pruned nodes are excluced unless entry should be pushed to the prunes too
-  * list of push messages is created - each node will have a list of `crds` values associated
-  * entries of below types will be dropped if their origins stake is below required value (currently 1 sol):
-    * `LowestSlot`
-    * `LegacyVersion`
-    * `DuplicateShred`
-    * `RestartHeaviestFork`
-    * `RestartLastVotedForkSlots`
-* pull requests are generated:
-  * list of valid (shred version matches or equals 0) and active (updated `crds` within 60 seconds from now) gossip nodes is collected
-  * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) a list of ping requests is created
-  * from each gossip address only nodes with highest stake are kept in the list
-  * for each node weight is calculated as follows:
-  ```rust
-  let stake = node_self_stake.min(node_stake[i]) / LAMPORTS_PER_SOL;
-  let weight = u64::BITS - stake.leading_zeros();
-  let weight = u64::from(weight).saturating_add(1).saturating_pow(2);
-  weight
-  ```
-    where: `node_self_stake` - stake of "our" node, `node_stake[i]` - stake of node from the list,
-  * `crds` filters are created from `crds` values, purged values and failed inserts
-  * filters are divided among peers selected randomly using weights calculated above - the higher nodes weight, the more filters will be associated with it
-  * additional randomly selected node which was not discovered yet is added to the list of nodes with all filters associated
-  * a pull request list is created from a list of filters and nodes self `LegacyContactInfo`
-  * pull requests are mapped into list of nodes
-* push messages, pull requests and ping messages are sent
-* values older than specified timeout are purged from `crds`
-* old failed insterts are also purged (these are pull responses which failed to be inserted into `crds` - they are preserved to stop sender sending back the same outdated payload by adding them to the filter for next pull request)
-* every 7500ms:
-  * node sends a push requests containing the following data: `LegacyContactInfo`, `ContactInfo`, `NodeInstance`,
-  * node refreshes its active set of nodes:
-    * list of valid (shred version matches or equals 0) and active (updated crds within 60 seconds from now) gossip nodes is collected
-    * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) * a list of ping requests is created
-    * from each gossip address only nodes with highest stake are kept in the list
-    * set of active nodes is rotated (*find out how!*)
-    * pings are sent
-
-
