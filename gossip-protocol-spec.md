@@ -2,7 +2,7 @@
 
 This document describes the gossip protocol without implementation details which can be found [here](/implementation-details.md).
 
-Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which each node need to deserialize. There are 6 types of messages specified:
+Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which nodes need to deserialize. There are 6 types of messages:
 * pull request
 * pull response
 * push message
@@ -10,11 +10,11 @@ Solana nodes communicate with each other and share data using the gossip protoco
 * ping
 * pong
 
-Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`) which is synchronized between them via pull requests, push messages and pull responses.
+Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in [_Cluster Replicated Data Store_ (`crds`)](/implementation-details.md#cluster-replicated-data-store) which is synchronized between them via pull requests, push messages and pull responses.
 
-### Message format
+## Message format
 
-Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). Apart from the data byte array packet contains additional metadata:
+Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). Apart from the actual data, packet contains additional metadata:
 
  * size - size of the packet
  * addr - address of the origin
@@ -22,19 +22,19 @@ Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is
  * flags - additional flags
 
 ```rust
-struct Packet {
+Packet {
     buffer: [u8; 1232],
     meta: Meta,
 }
 
-struct Meta {
-    pub size: usize,
-    pub addr: IpAddr,
-    pub port: u16,
-    pub flags: PacketFlags,
+Meta {
+    size: usize,
+    addr: IpAddr,
+    port: u16,
+    flags: PacketFlags,
 }
 
-struct PacketFlags: u8 {
+PacketFlags {
     const DISCARD        = 0b0000_0001;
     const FORWARDED      = 0b0000_0010;
     const REPAIR         = 0b0000_0100;
@@ -44,113 +44,131 @@ struct PacketFlags: u8 {
 }
 ```
 
-#### `Protocol`
+Data sent in the message is serialized from a `Protocol` type:
 
-Data sent in the message is serialized from a type:
 ``` rust
-enum Protocol {
-  PullRequest(CrdsFilter, CrdsValue),
-  PullResponse(Pubkey, Vec<CrdsValue>),
-  PushMessage(Pubkey, Vec<CrdsValue>),
-  PruneMessage(Pubkey, PruneData),
-  PingMessage(Ping),
-  PongMessage(Pong)
+enum Protocol
+{
+    PullRequest(CrdsFilter, CrdsValue),
+    PullResponse(Pubkey, [CrdsValue]),
+    PushMessage(Pubkey, [CrdsValue]),
+    PruneMessage(Pubkey, PruneData),
+    PingMessage(Ping),
+    PongMessage(Pong)
 }
 ```
 
-where:
-* `PullRequest` - is sent by node to ask the cluster for new information, contains two values:
+### `PullRequest`
+
+Is sent by node to ask the cluster for new information. It contains a bloom filter with things node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
+
+`PullRequest` message contains two values:
   * `CrdsFilter` - a bloom filter representing things node already has
-  * `CrdsValue` - a [value](#crdsvalue), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.)
-* `PullResponse` - these are sent in response to `PullRequest` and contain:
+  * `CrdsValue` - a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.)
+
+### `PullResponse`
+
+These are sent in response to `PullRequest` and contain:
   * `Pubkey` - a public key of the origin
-  * `Vec<CrdsValue>` - a list of new values 
-* `PushMessage` - it is sent by nodes who want to share information with others. They contain:
+  * `[CrdsValue]` - a list of new values 
+
+### `PushMessage` 
+It is sent by nodes who want to share information with others. Node receiving the message checks for:
+- duplication - duplicated messages are dropped, node response with prune message if message came from low staked node
+- new data:
+    - new information is stored in `crds` and replaces old value
+    - stores message in `pushed_once` which is used for detecting duplicates
+    - retransmits information to its peers
+- expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped
+
+The `PushMessage` contains:
   *  `Pubkey` - a public key of the origin
-  * `Vec<CrdsValue>` - list of values to share
-   <!-- Node receiving the message checks for:
-    - duplication - duplicated messages are dropped, node response with prune message if message came from low staked node
-    - new data:
-        - new information is stored in `crds` and replaces old value
-        - stores message in `pushed_once` which is used for detecting duplicates
-        - retransmits information to its peers
-    - expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped -->
-* `PruneMessage` - it is sent to peers with a list of nodes that should be pruned
+  * `[CrdsValue]` - list of values to share
+
+### `PruneMessage`
+It is sent to peers with a list of nodes that should be pruned. The message contains:
   * `Pubkey` - a public key of the origin
-  * `PruneData` - contains a [list of pruned nodes](#prunedata)
-* `PingMessage` - nodes are sending [ping](#ping) messages from time to time to other nodes to check whether they are active. `PingMessage` contains a 32 bytes token generated by the origin.
-* `PongMessage` - sent by node as a [response](#pong) to `PingMessage` - contains public key of sending node, its signature and hash of the token sent in `PingMessage`.
+  * `PruneData` - a structure which contains:
+    - pubkey - public key of the origin
+    - prunes - public keys of nodes that should be pruned
+    - signature - signature of this message
+    - destination - a public key of the destination node of this message
+    - wallclock - wallclock of the node that generated that message
 
-
-#### `PruneData`
-This structure defines a prune message sent by nodes:
-- pubkey - public key of the origin
-- prunes - public keys of nodes that should be pruned
-- signature - signature of this message
-- destination - a public key of the destination node of this message
-- wallclock - wallclock of the node that generated that message
 ```rust
-struct PruneData {
+PruneData {
     pubkey: Pubkey,
-    prunes: Vec<Pubkey>,
+    prunes: [Pubkey],
     signature: Signature,
     destination: Pubkey,
     wallclock: u64,
 }
 ```
+##### `Pubkey`
+```rust
+Pubkey = [u8; 32];
+```
+##### `Signature`
+```rust
+Signature = [u8, 64];
+```
 
-#### `Ping`
-Ping structure contains:
+### `PingMessage`
+Nodes are sending ping messages from time to time to other nodes to check whether they are active. `PingMessage` contains a `Ping` structure which consists of:
 - from - public key of the origin
 - token - 32 bytes token
 - signature - signature of the message
 
 ```rust
-struct Ping<T> {
+Ping {
     from: Pubkey,
-    token: T,
+    token: [u8, 32],
     signature: Signature,
 }
-
-type Ping = Ping<[u8; 32]>;
 ```
 
-#### `Pong`
-Pong structure contains:
+### `PongMessage` 
+Sent by node as a [response](#pong) to `PingMessage`. Contains a `Pong` structure which consists of:
 - from - public key of the origin
 - hash - hash of the received ping token
 - signature - signature of the message
 
 ```rust
-struct Pong {
+Pong {
     from: Pubkey,
     hash: Hash,
     signature: Signature,
 }
 ```
-
-#### `CrdsValue`
-Values that are sent in push messages, pull requests & pull responses contain signature and data:
+##### `Hash`
 ```rust
-struct CrdsValue {
-    pub signature: Signature,
-    pub data: CrdsData,
-}
+Hash = [u8; 32]
 ```
 
-where `CrdsData` is defined as:
+## Data shared between nodes
+
+Values that are sent in push messages, pull requests & pull responses contain signature and the actual shared data:
 ```rust
-enum CrdsData {
+CrdsValue {
+    signature: Signature,
+    data: CrdsData,
+}
+```
+### `CrdsData`
+Defines a data type that can be sent between nodes. Can be one of:
+```rust
+enum CrdsData
+{
     LegacyContactInfo(LegacyContactInfo),
-    Vote(VoteIndex, Vote),
+    Vote(u8, Vote),
     LowestSlot(u8, LowestSlot),
     LegacySnapshotHashes(LegacySnapshotHashes),
     AccountsHashes(AccountsHashes),
-    EpochSlots(EpochSlotsIndex, EpochSlots),
+    EpochSlots(u8, EpochSlots),
     LegacyVersion(LegacyVersion),
     Version(Version),
     NodeInstance(NodeInstance),
-    DuplicateShred(DuplicateShredIndex, DuplicateShred),
+    DuplicateShred(u16, DuplicateShred),
     SnapshotHashes(SnapshotHashes),
     ContactInfo(ContactInfo),
     RestartLastVotedForkSlots(RestartLastVotedForkSlots),
@@ -159,7 +177,7 @@ enum CrdsData {
 ```
 
 #### `LegacyContactInfo`
-Basic info about the node. Nodes send this message to introduce themselves and provide all ports that can be used by other peers to communicate with them:
+Basic info about the node. Nodes send this message to introduce themselves and provide all addresses and ports that can be used by other peers to communicate with them:
 - id - public key of origin
 - gossip - gossip protocol address
 - tvu - address to connect to for replication
@@ -175,7 +193,7 @@ Basic info about the node. Nodes send this message to introduce themselves and p
 - shred_version - the shred version node has been configured to use
 
 ```rust
-struct LegacyContactInfo {
+LegacyContactInfo {
     id: Pubkey,
     gossip: SocketAddr,
     tvu: SocketAddr,
@@ -191,33 +209,116 @@ struct LegacyContactInfo {
     shred_version: u16,
 }
 ```
+##### `SocketAddr`
+A v4 or v6 socket address and port
+```rust
+enum SocketAddr {
+    V4(SocketAddrV4 {
+        ip: Ipv4Addr,
+        port: u16
+    }),
+    V6(SocketAddrV6 {
+        ip: Ipv6Addr,
+        port: u16,
+        flowinfo: u32,
+        scope_id: u32
+    })
+}
+```
+##### `Ipv4Addr`
+IP v4 address
+```rust
+Ipv4Addr {
+    octets: [u8, 4]
+}
+```
+##### `Ipv6Addr`
+IP v6 address
+```rust
+Ipv6Addr {
+    octets: [u8, 32]
+}
+```
 
 #### `Vote`
-```rust
-Vote(VoteIndex, Vote)
-```
 Contains a one byte index and a `Vote` structure:
+```rust
+Vote(u8, Vote)
+```
+##### `Vote`
  - from - public key of origin
  - transaction - an atomically-committed sequence of instructions
  - wallclock - wallclock of the node that generated that message
  - slot - the unit of time given to a leader for encoding a block, it is actually an `u64` type
 
  ```rust
- type VoteIndex = u8;
-
- struct Vote {
+ Vote {
     from: Pubkey,
     transaction: Transaction,
     wallclock: u64,
-    slot: Option<Slot>,
+    slot: Slot | None,
 }
  ```
+ ##### `Slot`
+```rust
+Slot = u64
+```
+##### `Transaction`
+An atomically-committed sequence of instructions.
+ * signature - list of signatures equal to `num_required_signatures` for the message
+ * message - transaction message containing instructions to invoke
+```rust
+Transaction {
+    signature: [Signature],
+    message: Message
+}
+```
+##### `Message`
+A transaction message.
+* header - message header 
+* account_keys - all account keys used by this transaction
+* recent_blockhash - hash of a recent ledger entry
+* instructions - list of programs to execute
+```rust
+Message {
+    header: MessageHeader,
+    account_keys: [Pubkey],
+    recent_blockhash: Hash,
+    instructions: [CompiledInstruction],
+}
+```
+##### `MessageHeader`
+
+* num_required_signatures - number of signatures required for this message to be considered valid
+* num_readonly_signed_accounts - last `num_readonly_signed_accounts` of the signed keys are read-only accounts
+* num_readonly_unsigned_accounts - last `num_readonly_unsigned_accounts` of the unsigned keys are read-only accounts
+```rust
+MessageHeader {
+    num_required_signatures: u8,
+    num_readonly_signed_accounts: u8,
+    num_readonly_unsigned_accounts: u8,
+}
+```
+
+##### `CompiledInstruction`
+* program_id_index - index of the transaction keys array indicating the program account ID that executes the program,
+* accounts: [u8] - indices of the transaction keys array indicating the accounts that are passed to a program
+* data - program input data
+```rust
+struct CompiledInstruction {
+    program_id_index: u8,
+    accounts: [u8],
+    data: [u8],
+}
+```
+
 
 #### `LowestSlot`
+Contains a one byte index (deprecated) and a `LowestSlot` structure:
 ```rust
 LowestSlot(u8, LowestSlot)
 ```
-Contains a one byte index (deprecated) and a `LowestSlot` structure:
+##### `LowestSlot`
 - from - public key of origin
 - root - deprecated
 - lowest - unit of time for encoding a block
@@ -226,12 +327,12 @@ Contains a one byte index (deprecated) and a `LowestSlot` structure:
 - wallclock - wallclock of the node that generated that message
 
 ```rust
-struct LowestSlot {
+LowestSlot {
     from: Pubkey,
     root: Slot,
     lowest: Slot,
-    slots: BTreeSet<Slot>,
-    stash: Vec<deprecated::EpochIncompleteSlots>,
+    slots: [Slot],
+    stash: [EpochIncompleteSlots],
     wallclock: u64,
 }
 ```
@@ -242,31 +343,51 @@ struct LowestSlot {
 - wallclock - wallclock of the node that generated that message
 
 ```rust
-type LegacySnapshotHashes = AccountsHashes;
-
-struct AccountsHashes {
+LegacySnapshotHashes = AccountsHashes {
     from: Pubkey,
-    hashes: Vec<(Slot, Hash)>,
+    hashes: [(Slot, Hash)],
     wallclock: u64,
 }
 ```
 
 #### `EpochSlots`
-```rust
-EpochSlots(EpochSlotsIndex, EpochSlots)
-```
 Contains a one byte index and a `EpochSlots` structure:
+```rust
+EpochSlots(u8, EpochSlots)
+```
+##### `EpochSlots`
 - from - public key of origin
 - slots - 
 - wallclock - wallclock of the node that generated that message
 
 ```rust
-type EpochSlotsIndex = u8;
-
-struct EpochSlots {
+EpochSlots {
     from: Pubkey,
-    slots: Vec<CompressedSlots>,
+    slots: [CompressedSlots],
     wallclock: u64,
+}
+```
+##### `CompressedSlots`
+```rust
+enum CompressedSlots {
+   Flate2(Flate2),
+   Uncompressed(Uncompressed),
+}
+```
+##### `Flate2`
+```rust
+Flate2 {
+    first_slot: Slot,
+    num: usize,
+    compressed: [u8]
+}
+```
+##### `Uncompressed`
+```rust
+Uncompressed {
+    first_slot: Slot,
+    num: usize,
+    slots: [u8],
 }
 ```
 
@@ -275,10 +396,19 @@ struct EpochSlots {
 - wallclock - wallclock of the node that generated that message
 - version - older version of the Solana used earlier 1.3.x releases
 ```rust
-struct LegacyVersion {
+LegacyVersion {
     from: Pubkey,
     wallclock: u64,
-    version: solana_version::LegacyVersion1,
+    version: LegacyVersion1,
+}
+```
+##### `LegacyVersion1`
+```rust
+LegacyVersion1 {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: u32 | None
 }
 ```
 
@@ -288,10 +418,20 @@ Version of Solana client the node is using
 - wallclock - wallclock of the node that generated that message
 - version - version of the Solana
 ```rust
-struct Version {
+Version {
     from: Pubkey,
     wallclock: u64,
-    version: solana_version::LegacyVersion2,
+    version: LegacyVersion2,
+}
+```
+##### `LegacyVersion2`
+```rust
+LegacyVersion2 {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: u32 | None,
+    feature_set: u32
 }
 ```
 
@@ -302,7 +442,7 @@ Contains node creation timestamp and randomly generated token:
 - timestamp - when the instance was created
 - token - randomly generated value at node instantiation.
 ```rust
-struct NodeInstance {
+NodeInstance {
     from: Pubkey,
     wallclock: u64,
     timestamp: u64,
@@ -312,25 +452,22 @@ struct NodeInstance {
 
 #### `DuplicateShred`
 ```rust
-DuplicateShred(DuplicateShredIndex, DuplicateShred)
+DuplicateShred(u16, DuplicateShred)
 ```
 Contains a 2 byte index and `DuplicateShred` structure:
 - from - public key of origin
 - wallclock - wallclock of the node that generated that message
 - slot - unit of time for encoding a block
 ```rust
-type DuplicateShredIndex = u16
-
-struct DuplicateShred {
+DuplicateShred {
     from: Pubkey,
     wallclock: u64,
     slot: Slot,
     _unused: u32,
     _unused_shred_type: ShredType,
-    // Serialized DuplicateSlotProof split into chunks.
     num_chunks: u8,
     chunk_index: u8,
-    chunk: Vec<u8>,
+    chunk: [u8],
 }
 ```
 
@@ -340,10 +477,10 @@ struct DuplicateShred {
 - incremental - 
 - wallclock - wallclock of the node that generated that message
 ```rust
-struct SnapshotHashes {
+SnapshotHashes {
     from: Pubkey,
     full: (Slot, Hash),
-    incremental: Vec<(Slot, Hash)>,
+    incremental: [(Slot, Hash)],
     wallclock: u64,
 }
 ```
@@ -359,16 +496,50 @@ struct SnapshotHashes {
 - extensions - future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused
 - cache - cache of nodes socket addresses
 ```rust
-struct ContactInfo {
+ContactInfo {
     pubkey: Pubkey,
     wallclock: u64,
     outset: u64,
     shred_version: u16,
-    version: solana_version::Version,
-    addrs: Vec<IpAddr>,
-    sockets: Vec<SocketEntry>,
-    extensions: Vec<Extension>,
-    cache: [SocketAddr; SOCKET_CACHE_SIZE],
+    version: Version,
+    addrs: [IpAddr],
+    sockets: [SocketEntry],
+    extensions: [Extension],
+    cache: [SocketAddr; 12],
+}
+```
+##### `Extension`
+```rust 
+Extension {}
+```
+##### `IpAddr`
+Is either v4 or v6 IP address
+```rust
+enum IpAddr {
+    V4(Ipv4Addr),
+    V6(Ipv4Addr)
+}
+```
+##### `SocketEntry`
+* key - protocol identifier (tvu, tpu, etc.)
+* index - IpAddr index in the addrs list
+* offset - port offset in respect to previous entry
+```rust
+SocketEntry {
+    key: u8,
+    index: u8,
+    offset: u16
+}
+```
+##### `Version`
+```rust
+Version {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: u32 | None,
+    feature_set: u32,
+    client: u16
 }
 ```
 
@@ -380,13 +551,20 @@ struct ContactInfo {
 - last_voted_hash - 
 - shred_version - the shred version node has been configured to use
 ```rust
-struct RestartLastVotedForkSlots {
+RestartLastVotedForkSlots {
     from: Pubkey,
     wallclock: u64,
     offsets: SlotsOffsets,
     last_voted_slot: Slot,
     last_voted_hash: Hash,
     shred_version: u16,
+}
+```
+##### `SlotsOffsets`
+```rust
+enum SlotsOffsets {
+    RunLengthEncoding([u16]),
+    RawOffsets([u8]),
 }
 ```
 
@@ -398,7 +576,7 @@ struct RestartLastVotedForkSlots {
 - observed_stake - 
 - shred_version - the shred version node has been configured to use
 ```rust
-struct RestartHeaviestFork {
+RestartHeaviestFork {
     from: Pubkey,
     wallclock: u64,
     last_slot: Slot,

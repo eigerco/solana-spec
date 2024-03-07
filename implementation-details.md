@@ -141,13 +141,14 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
   * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) a list of ping requests is created
   * from each gossip address only nodes with highest stake are kept in the list
   * for each node weight is calculated as follows:
-  ```rust
-  let stake = node_self_stake.min(node_stake[i]) / LAMPORTS_PER_SOL;
-  let weight = u64::BITS - stake.leading_zeros();
-  let weight = u64::from(weight).saturating_add(1).saturating_pow(2);
-  weight
-  ```
-    where: `node_self_stake` - stake of "our" node, `node_stake[i]` - stake of node from the list,
+$$ stake = {min(node\_self\_stake, node\_stake[i]) \over LAMPORTS\_PER\_SOL} $$
+$$ weight = 64 - stake.leading\_zeros() $$
+$$ weight = {(weight + 1)^2} $$
+  where: 
+    * `node_self_stake` - stake of "our" node, 
+    * `node_stake[i]` - stake of i-th node from the list,
+    * `stake.leading_zeros()` - leading zeros in the binary representation of the `stake` value (`u64` type)
+
   * `crds` filters are created from `crds` values, purged values and failed inserts
   * filters are divided among peers selected randomly using weights calculated above - the higher nodes weight, the more filters will be associated with it
   * additional randomly selected node which was not discovered yet is added to the list of nodes with all filters associated
@@ -168,3 +169,8 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
 ### Sending data
 
 Messages are serialized to a binary form and sent to peers via UDP sockets.
+
+## Cluster Replicated Data Store
+
+Cluster Replicated Data Store (`crds`) is a data store of all values nodes share with each other. Each node synchronizes its `crds` via the gossip protocol. Data is stored in a single map of `CrdsValueLabel(Pubkey) -> CrdsValue`, where many `CrdsValueLabel` labels are mapped to a single `Pubkey`.
+
