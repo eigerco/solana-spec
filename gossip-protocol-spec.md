@@ -177,7 +177,7 @@ enum CrdsData
 ```
 
 #### `LegacyContactInfo`
-Basic info about the node. Nodes send this message to introduce themselves and provide all addresses and ports that can be used by other peers to communicate with them:
+Basic info about the node. Nodes send this message to introduce themselves and provide all addresses and ports that can be used by their peers to communicate with them:
 - id - public key of origin
 - gossip - gossip protocol address
 - tvu - address to connect to for replication
@@ -241,13 +241,13 @@ Ipv6Addr {
 ```
 
 #### `Vote`
-Contains a one byte index and a `Vote` structure:
+It's a validators vote on a fork. Contains a one byte index from vote tower (range 0 to 31) and a `Vote` structure:
 ```rust
 Vote(u8, Vote)
 ```
 ##### `Vote`
  - from - public key of origin
- - transaction - an atomically-committed sequence of instructions
+ - transaction - a vote transaction, an atomically-committed sequence of instructions
  - wallclock - wallclock of the node that generated that message
  - slot - the unit of time given to a leader for encoding a block, it is actually an `u64` type
 
@@ -314,14 +314,14 @@ struct CompiledInstruction {
 
 
 #### `LowestSlot`
-Contains a one byte index (deprecated) and a `LowestSlot` structure:
+It is the first available slot in Solana blockstore that contains any data. Contains a one byte index (deprecated) and a `LowestSlot` structure:
 ```rust
 LowestSlot(u8, LowestSlot)
 ```
 ##### `LowestSlot`
 - from - public key of origin
 - root - deprecated
-- lowest - unit of time for encoding a block
+- lowest - the actual slot
 - slots - deprecated
 - stash - deprecated
 - wallclock - wallclock of the node that generated that message
@@ -351,13 +351,13 @@ LegacySnapshotHashes = AccountsHashes {
 ```
 
 #### `EpochSlots`
-Contains a one byte index and a `EpochSlots` structure:
+Contains a one byte index and a `EpochSlots` structure which holds the list of all slots from an epoch (epoch consists around 432000 slots). There can be 256 epoch slots in total:
 ```rust
 EpochSlots(u8, EpochSlots)
 ```
 ##### `EpochSlots`
 - from - public key of origin
-- slots - 
+- slots - list of epoch slots - can be either uncompressed or compressed with `Flate2` algorithm
 - wallclock - wallclock of the node that generated that message
 
 ```rust
