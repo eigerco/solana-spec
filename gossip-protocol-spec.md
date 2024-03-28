@@ -16,10 +16,10 @@ Each message contains data specific to its type: values that nodes share between
 
 Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). Apart from the actual data, packet contains additional metadata:
 
- * size - size of the packet
- * addr - address of the origin
- * port - port of the origin
- * flags - additional flags
+ * `size` - size of the packet
+ * `addr` - address of the origin
+ * `port` - port of the origin
+ * `flags` - additional flags
 
 ```rust
 Packet {
@@ -89,11 +89,11 @@ The `PushMessage` contains:
 It is sent to peers with a list of nodes that should be pruned. The message contains:
   * `Pubkey` - a public key of the origin
   * `PruneData` - a structure which contains:
-    - pubkey - public key of the origin
-    - prunes - public keys of nodes that should be pruned
-    - signature - signature of this message
-    - destination - a public key of the destination node of this message
-    - wallclock - wallclock of the node that generated that message
+    - `pubkey` - public key of the origin
+    - `prunes` - public keys of nodes that should be pruned
+    - `signature` - signature of this message
+    - `destination` - a public key of the destination node of this message
+    - `wallclock` - wallclock of the node that generated that message
 
 ```rust
 PruneData {
@@ -105,19 +105,21 @@ PruneData {
 }
 ```
 ##### `Pubkey`
+A 32 bytes array
 ```rust
 Pubkey = [u8; 32];
 ```
 ##### `Signature`
+A 64 bytes array
 ```rust
 Signature = [u8, 64];
 ```
 
 ### `PingMessage`
 Nodes are sending ping messages from time to time to other nodes to check whether they are active. `PingMessage` contains a `Ping` structure which consists of:
-- from - public key of the origin
-- token - 32 bytes token
-- signature - signature of the message
+- `from` - public key of the origin
+- `token` - 32 bytes token
+- `signature` - signature of the message
 
 ```rust
 Ping {
@@ -129,9 +131,9 @@ Ping {
 
 ### `PongMessage` 
 Sent by node as a [response](#pong) to `PingMessage`. Contains a `Pong` structure which consists of:
-- from - public key of the origin
-- hash - hash of the received ping token
-- signature - signature of the message
+- `from` - public key of the origin
+- `hash` - hash of the received ping token
+- `signature` - signature of the message
 
 ```rust
 Pong {
@@ -178,19 +180,19 @@ enum CrdsData
 
 #### `LegacyContactInfo`
 Basic info about the node. Nodes send this message to introduce themselves and provide all addresses and ports that can be used by their peers to communicate with them:
-- id - public key of origin
-- gossip - gossip protocol address
-- tvu - address to connect to for replication
-- tvu quic - TVU over QUIC protocol
-- serve repair quic - repair service for QUIC protocol
-- tpu - transactions address
-- tpu forwards - address to forward unprocessed replications
-- tpu vote - address for bank state requests
-- rpc - address for JSON-RPC requests
-- rpc pubsub - websocket for JSON-RPC push notifications
-- serve repair - address for send repair requests
-- wallclock - wallclock of the node that generated that message
-- shred_version - the shred version node has been configured to use
+- `id` - public key of origin
+- `gossip` - gossip protocol address
+- `tvu` - address to connect to for replication
+- `tvu_quic` - TVU over QUIC protocol
+- `serve_repair_quic` - repair service for QUIC protocol
+- `tpu` - transactions address
+- `tpu_forwards` - address to forward unprocessed replications
+- `tpu_vote` - address for bank state requests
+- `rpc` - address for JSON-RPC requests
+- `rpc_pubsub` - websocket for JSON-RPC push notifications
+- `serve_repair` - address for send repair requests
+- `wallclock` - wallclock of the node that generated that message
+- `shred_version` - the shred version node has been configured to use
 
 ```rust
 LegacyContactInfo {
@@ -246,10 +248,10 @@ It's a validators vote on a fork. Contains a one byte index from vote tower (ran
 Vote(u8, Vote)
 ```
 ##### `Vote`
- - from - public key of origin
- - transaction - a vote transaction, an atomically-committed sequence of instructions
- - wallclock - wallclock of the node that generated that message
- - slot - the unit of time given to a leader for encoding a block, it is actually an `u64` type
+ - `from` - public key of origin
+ - `transaction` - a vote transaction, an atomically-committed sequence of instructions
+ - `wallclock` - wallclock of the node that generated that message
+ - `slot` - the unit of time given to a leader for encoding a block, it is actually an `u64` type
 
  ```rust
  Vote {
@@ -265,8 +267,8 @@ Slot = u64
 ```
 ##### `Transaction`
 An atomically-committed sequence of instructions.
- * signature - list of signatures equal to `num_required_signatures` for the message
- * message - transaction message containing instructions to invoke
+ * `signature` - list of signatures equal to `num_required_signatures` for the message
+ * `message` - transaction message containing instructions to invoke
 ```rust
 Transaction {
     signature: [Signature],
@@ -275,10 +277,10 @@ Transaction {
 ```
 ##### `Message`
 A transaction message.
-* header - message header 
-* account_keys - all account keys used by this transaction
-* recent_blockhash - hash of a recent ledger entry
-* instructions - list of programs to execute
+* `header` - message header 
+* `account_keys` - all account keys used by this transaction
+* `recent_blockhash` - hash of a recent ledger entry
+* `instructions` - list of programs to execute
 ```rust
 Message {
     header: MessageHeader,
@@ -289,9 +291,9 @@ Message {
 ```
 ##### `MessageHeader`
 
-* num_required_signatures - number of signatures required for this message to be considered valid
-* num_readonly_signed_accounts - last `num_readonly_signed_accounts` of the signed keys are read-only accounts
-* num_readonly_unsigned_accounts - last `num_readonly_unsigned_accounts` of the unsigned keys are read-only accounts
+* `num_required_signatures` - number of signatures required for this message to be considered valid
+* `num_readonly_signed_accounts` - last `num_readonly_signed_accounts` of the signed keys are read-only accounts
+* `num_readonly_unsigned_accounts` - last `num_readonly_unsigned_accounts` of the unsigned keys are read-only accounts
 ```rust
 MessageHeader {
     num_required_signatures: u8,
@@ -301,9 +303,9 @@ MessageHeader {
 ```
 
 ##### `CompiledInstruction`
-* program_id_index - index of the transaction keys array indicating the program account ID that executes the program,
-* accounts: [u8] - indices of the transaction keys array indicating the accounts that are passed to a program
-* data - program input data
+* `program_id_index` - index of the transaction keys array indicating the program account ID that executes the program,
+* `accounts` - indices of the transaction keys array indicating the accounts that are passed to a program
+* `data` - program input data
 ```rust
 struct CompiledInstruction {
     program_id_index: u8,
@@ -319,12 +321,12 @@ It is the first available slot in Solana blockstore that contains any data. Cont
 LowestSlot(u8, LowestSlot)
 ```
 ##### `LowestSlot`
-- from - public key of origin
-- root - deprecated
-- lowest - the actual slot
-- slots - deprecated
-- stash - deprecated
-- wallclock - wallclock of the node that generated that message
+- `from` - public key of origin
+- `root` - _deprecated_
+- `lowest` - the actual slot
+- `slots` - _deprecated_
+- `stash` - _deprecated_
+- `wallclock` - wallclock of the node that generated that message
 
 ```rust
 LowestSlot {
@@ -338,9 +340,10 @@ LowestSlot {
 ```
 
 #### `LegacySnapshotHashes`, `AccountsHashes`
-- from - public key of origin
-- hashes - a list of slots and hashes
-- wallclock - wallclock of the node that generated that message
+_Deprecated_
+- `from` - public key of origin
+- `hashes` - a list of slots and hashes
+- `wallclock` - wallclock of the node that generated that message
 
 ```rust
 LegacySnapshotHashes = AccountsHashes {
@@ -356,9 +359,9 @@ Contains a one byte index and a `EpochSlots` structure which holds the list of a
 EpochSlots(u8, EpochSlots)
 ```
 ##### `EpochSlots`
-- from - public key of origin
-- slots - list of epoch slots - can be either uncompressed or compressed with `Flate2` algorithm
-- wallclock - wallclock of the node that generated that message
+- `from` - public key of origin
+- `slots` - list of epoch slots - can be either uncompressed or compressed with `Flate2` algorithm
+- `wallclock` - wallclock of the node that generated that message
 
 ```rust
 EpochSlots {
@@ -392,9 +395,10 @@ Uncompressed {
 ```
 
 #### `LegacyVersion`
-- from - public key of origin
-- wallclock - wallclock of the node that generated that message
-- version - older version of the Solana used earlier 1.3.x releases
+Version of Solana client the node is using
+- `from` - public key of origin
+- `wallclock` - wallclock of the node that generated that message
+- `version` - older version of the Solana used earlier 1.3.x releases
 ```rust
 LegacyVersion {
     from: Pubkey,
@@ -414,9 +418,9 @@ LegacyVersion1 {
 
 #### `Version`
 Version of Solana client the node is using
-- from - public key of origin
-- wallclock - wallclock of the node that generated that message
-- version - version of the Solana
+- `from` - public key of origin
+- `wallclock` - wallclock of the node that generated that message
+- `version` - version of the Solana
 ```rust
 Version {
     from: Pubkey,
@@ -437,10 +441,10 @@ LegacyVersion2 {
 
 #### `NodeInstance`
 Contains node creation timestamp and randomly generated token:
-- from - public key of origin
-- wallclock - wallclock of the node that generated that message
-- timestamp - when the instance was created
-- token - randomly generated value at node instantiation.
+- `from` - public key of origin
+- `wallclock` - wallclock of the node that generated that message
+- `timestamp` - when the instance was created
+- `token` - randomly generated value at node instantiation.
 ```rust
 NodeInstance {
     from: Pubkey,
@@ -451,13 +455,19 @@ NodeInstance {
 ```
 
 #### `DuplicateShred`
+A duplicated shred proof.
 ```rust
 DuplicateShred(u16, DuplicateShred)
 ```
 Contains a 2 byte index and `DuplicateShred` structure:
-- from - public key of origin
-- wallclock - wallclock of the node that generated that message
-- slot - unit of time for encoding a block
+- `from` - public key of origin
+- `wallclock` - wallclock of the node that generated that message
+- `slot` - unit of time for encoding a block
+- `_unused` - _unused_
+- `_unused_shred_type` - _unused_
+- `num_chunks` - number of chunks available
+- `chunk_index` - index of the chunk
+- `chunk` - shred data
 ```rust
 DuplicateShred {
     from: Pubkey,
@@ -471,11 +481,20 @@ DuplicateShred {
 }
 ```
 
+##### `ShredType`
+```rust
+enum ShredType {
+    Data = 0b1010_0101,
+    Code = 0b0101_1010,
+}
+```
+
 #### `SnapshotHashes`
-- from - public key of origin
-- full - 
-- incremental - 
-- wallclock - wallclock of the node that generated that message
+Contains hashes of full and incremental snapshots
+- `from` - public key of origin
+- `full` - hash and slot number of the full snapshot
+- `incremental` - list of hashes and slot numbers of incremental snapshots
+- `wallclock` - wallclock of the node that generated that message
 ```rust
 SnapshotHashes {
     from: Pubkey,
@@ -486,15 +505,15 @@ SnapshotHashes {
 ```
 
 #### `ContactInfo`
-- pubkey - public key of origin
-- wallclock - wallclock of the node that generated that message
-- outset - timestamp when node instance was first created
-- shred_version - the shred version node has been configured to use
-- version - Solana version
-- addrs - list of unique IP addresses
-- sockets - list of nique sockets
-- extensions - future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused
-- cache - cache of nodes socket addresses
+- `pubkey` - public key of origin
+- `wallclock` - wallclock of the node that generated that message
+- `outset` - timestamp when node instance was first created
+- `shred_version` - the shred version node has been configured to use
+- `version` - Solana version
+- `addrs` - list of unique IP addresses
+- `sockets` - list of nique sockets
+- `extensions` - future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused
+- `cache` - cache of nodes socket addresses
 ```rust
 ContactInfo {
     pubkey: Pubkey,
@@ -521,9 +540,9 @@ enum IpAddr {
 }
 ```
 ##### `SocketEntry`
-* key - protocol identifier (tvu, tpu, etc.)
-* index - IpAddr index in the addrs list
-* offset - port offset in respect to previous entry
+* `key` - protocol identifier (tvu, tpu, etc.)
+* `index` - IpAddr index in the addrs list
+* `offset` - port offset in respect to previous entry
 ```rust
 SocketEntry {
     key: u8,
@@ -544,12 +563,13 @@ Version {
 ```
 
 #### `RestartLastVotedForkSlots`
-- from - public key of origin
-- wallclock - timestamp of data creation
-- offsets - 
-- last_voted_slot - 
-- last_voted_hash - 
-- shred_version - the shred version node has been configured to use
+Contains a list of last voted fork slots
+- `from` - public key of origin
+- `wallclock` - timestamp of data creation
+- `offsets` - list of slots
+- `last_voted_slot` - last voted slot
+- `last_voted_hash` - 
+- `shred_version` - the shred version node has been configured to use
 ```rust
 RestartLastVotedForkSlots {
     from: Pubkey,
@@ -569,12 +589,13 @@ enum SlotsOffsets {
 ```
 
 #### `RestartHeaviestFork`
-- from - public key of origin
-- wallclock - timestamp of data creation
-- last_slot - 
-- last_hash - 
-- observed_stake - 
-- shred_version - the shred version node has been configured to use
+Contains heaviest fork
+- `from` - public key of origin
+- `wallclock` - timestamp of data creation
+- `last_slot` - last slot of the fork
+- `last_hash` - hash of the last slot
+- `observed_stake` - 
+- `shred_version` - the shred version node has been configured to use
 ```rust
 RestartHeaviestFork {
     from: Pubkey,
