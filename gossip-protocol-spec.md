@@ -74,7 +74,7 @@ These are sent in response to `PullRequest` and contain:
 
 ### `PushMessage` 
 It is sent by nodes who want to share information with others. Node receiving the message checks for:
-- duplication - duplicated messages are dropped, node response with prune message if message came from low staked node
+- duplication - duplicated messages are dropped, node responses with prune message if message came from low staked node
 - new data:
     - new information is stored in `crds` and replaces old value
     - stores message in `pushed_once` which is used for detecting duplicates
@@ -116,7 +116,7 @@ Signature = [u8, 64];
 ```
 
 ### `PingMessage`
-Nodes are sending ping messages from time to time to other nodes to check whether they are active. `PingMessage` contains a `Ping` structure which consists of:
+Nodes send ping messages frequently to their peers to check whether they are active. `PingMessage` contains a `Ping` structure which consists of:
 - `from` - public key of the origin
 - `token` - 32 bytes token
 - `signature` - signature of the message
@@ -186,11 +186,11 @@ Basic info about the node. Nodes send this message to introduce themselves and p
 - `tvu_quic` - TVU over QUIC protocol
 - `serve_repair_quic` - repair service for QUIC protocol
 - `tpu` - transactions address
-- `tpu_forwards` - address to forward unprocessed replications
-- `tpu_vote` - address for bank state requests
+- `tpu_forwards` - address to forward unprocessed transactions
+- `tpu_vote` - address for sending votes
 - `rpc` - address for JSON-RPC requests
 - `rpc_pubsub` - websocket for JSON-RPC push notifications
-- `serve_repair` - address for send repair requests
+- `serve_repair` - address for sending repair requests
 - `wallclock` - wallclock of the node that generated that message
 - `shred_version` - the shred version node has been configured to use
 
@@ -251,7 +251,7 @@ Vote(u8, Vote)
  - `from` - public key of origin
  - `transaction` - a vote transaction, an atomically-committed sequence of instructions
  - `wallclock` - wallclock of the node that generated that message
- - `slot` - the unit of time given to a leader for encoding a block, it is actually an `u64` type
+ - `slot` - slot in which the vote was created
 
  ```rust
  Vote {
@@ -262,6 +262,7 @@ Vote(u8, Vote)
 }
  ```
  ##### `Slot`
+ The unit of time given to a leader for encoding a block:
 ```rust
 Slot = u64
 ```
@@ -316,7 +317,7 @@ struct CompiledInstruction {
 
 
 #### `LowestSlot`
-It is the first available slot in Solana blockstore that contains any data. Contains a one byte index (deprecated) and a `LowestSlot` structure:
+It is the first available slot in Solana [blockstore](https://docs.solanalabs.com/validator/blockstore) that contains any data. Contains a one byte index (deprecated) and a `LowestSlot` structure:
 ```rust
 LowestSlot(u8, LowestSlot)
 ```
@@ -336,6 +337,22 @@ LowestSlot {
     slots: [Slot],
     stash: [EpochIncompleteSlots],
     wallclock: u64,
+}
+```
+###### `EpochIncompleteSlots`
+```rust
+EpochIncompleteSlots {
+    first: Slot,
+    compression: CompressionType,
+    compressed_list: [u8],
+}
+```
+###### `CompressionType`
+```rust
+enum CompressionType {
+    Uncompressed,
+    GZip,
+    BZip2,
 }
 ```
 
@@ -360,7 +377,7 @@ EpochSlots(u8, EpochSlots)
 ```
 ##### `EpochSlots`
 - `from` - public key of origin
-- `slots` - list of epoch slots - can be either uncompressed or compressed with `Flate2` algorithm
+- `slots` - list of epoch slots - either uncompressed or compressed with a `Flate2` algorithm
 - `wallclock` - wallclock of the node that generated that message
 
 ```rust
@@ -395,10 +412,10 @@ Uncompressed {
 ```
 
 #### `LegacyVersion`
-Version of Solana client the node is using
+The older version of Solana client the node is using:
 - `from` - public key of origin
 - `wallclock` - wallclock of the node that generated that message
-- `version` - older version of the Solana used earlier 1.3.x releases
+- `version` - older version of the Solana used in 1.3.x and earlier releases
 ```rust
 LegacyVersion {
     from: Pubkey,
@@ -417,7 +434,7 @@ LegacyVersion1 {
 ```
 
 #### `Version`
-Version of Solana client the node is using
+Version of Solana client the node is using:
 - `from` - public key of origin
 - `wallclock` - wallclock of the node that generated that message
 - `version` - version of the Solana
@@ -455,14 +472,14 @@ NodeInstance {
 ```
 
 #### `DuplicateShred`
-A duplicated shred proof.
+A duplicated shred proof:
 ```rust
 DuplicateShred(u16, DuplicateShred)
 ```
 Contains a 2 byte index and `DuplicateShred` structure:
 - `from` - public key of origin
 - `wallclock` - wallclock of the node that generated that message
-- `slot` - unit of time for encoding a block
+- `slot` - slot when shreds where created
 - `_unused` - _unused_
 - `_unused_shred_type` - _unused_
 - `num_chunks` - number of chunks available
@@ -490,7 +507,7 @@ enum ShredType {
 ```
 
 #### `SnapshotHashes`
-Contains hashes of full and incremental snapshots
+Contains hashes of full and incremental snapshots:
 - `from` - public key of origin
 - `full` - hash and slot number of the full snapshot
 - `incremental` - list of hashes and slot numbers of incremental snapshots
@@ -505,13 +522,14 @@ SnapshotHashes {
 ```
 
 #### `ContactInfo`
+Contact info of the node:
 - `pubkey` - public key of origin
 - `wallclock` - wallclock of the node that generated that message
 - `outset` - timestamp when node instance was first created
 - `shred_version` - the shred version node has been configured to use
 - `version` - Solana version
 - `addrs` - list of unique IP addresses
-- `sockets` - list of nique sockets
+- `sockets` - list of unique sockets
 - `extensions` - future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused
 - `cache` - cache of nodes socket addresses
 ```rust
@@ -532,7 +550,7 @@ ContactInfo {
 Extension {}
 ```
 ##### `IpAddr`
-Is either v4 or v6 IP address
+Is either v4 or v6 IP address:
 ```rust
 enum IpAddr {
     V4(Ipv4Addr),
@@ -563,7 +581,7 @@ Version {
 ```
 
 #### `RestartLastVotedForkSlots`
-Contains a list of last voted fork slots
+Contains a list of last voted fork slots:
 - `from` - public key of origin
 - `wallclock` - timestamp of data creation
 - `offsets` - list of slots
@@ -589,7 +607,7 @@ enum SlotsOffsets {
 ```
 
 #### `RestartHeaviestFork`
-Contains heaviest fork
+Contains heaviest fork:
 - `from` - public key of origin
 - `wallclock` - timestamp of data creation
 - `last_slot` - last slot of the fork
