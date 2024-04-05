@@ -4,7 +4,7 @@ This document describes how the gossip protocol is implemented in Solana Rust cl
 * `gossip` mode - node binds to specified UDP socket and fully participates in the gossip
 * `spy` mode - node binds to an UDP socket at random port in range [8000-10000] and spies on gossip via pull requests
 
-Nodes run several threads which are consuming & processing packets, running gossip loop and sending & receiving packets via UDP sockets. Threads communicate with each other using a thread-safe multi-consumer multi-producer channels for message passing (`crossbeam-channel` crate).
+Nodes run several threads which are consuming & processing packets, running gossip loop and sending & receiving packets via UDP sockets. Threads communicate with each other using a thread-safe multi-consumer multi-producer channels for message passing.
 
 ## Data management in gossip service
 
@@ -38,7 +38,7 @@ Packet receiver thread binds to a socket on address 0.0.0.0 and specified port i
 
 ### Consuming packets
 
-Data packets are being checked before further processing. First packets are deserialized from the binary form into a `Protocol` type and then sanitized and verified.
+Data packets are being checked before further [processing](#processing-packets). First packets are [deserialized](#deserialization) from the binary form into a `Protocol` type and then [sanitized](#data-sanitization) and [verified](#data-verification).
 
 #### Deserialization 
 
@@ -70,32 +70,38 @@ Packets are filtered by shred version - only packets from origin with the same s
 #### Processing pull requests
 
 * Self pull requests are ignored. 
-* Values are filtered - in case of duplicates, only the most recent ones are kept
-* Values are inserted into `crds`
-* Pull requests are checked if coming from a valid address and if the address has responded to a ping request, also returns ping packets for address that need to be pinged
+* Pull reqest values:
+  * are filtered - in case of duplicates, only the most recent ones are kept
+  * are inserted into `crds`
+* Pull requests are checked if coming from a valid address and if the address has responded to a ping request
+  * Ping packets are generated for addresses that need to be pinged
 * Pull responses are generated:
-  * wallclock is checked for each pull request - too old filters are skipped
-  * `crds` values are filtered out using filters from pull requests, too new values are also filtered out
+  * wallclock is checked for each pull request - too old requests are skipped
+  * `crds` values are filtered out using filters from pull requests 
+    * values with newer wallclock than pull reqest sender are also filtered out
   * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
-
+* Pull responses and pings are sent
 #### Processing pull responses
 
-Pull responses are divided into 3 lists by their timestamps:
-* responses either don't exist in nodes `crds` or have newer timestamps - these are inserted into `crds`, their owners timestamps are updated
-* responses with older values - these are also inserted, but their owners timestamps are not updated
-* hash values of outdated values which failed to be insterted
+Pull responses are processed according to their timestamps:
+* responses that don't exist in the nodes `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
+* responses with expired timestamps are also inserted, but without updating owner timestamps
+* hashes of outdated values which were not insterted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers to send them back
 
 #### Processing push messages
-* values not too old and not existing in `crds` are inserted
-* in case value type is `LegacyContactInfo` - node info and its shred version are stored
+* values not too old and not existing in `crds` are inserted, in case of some of the types values are additionaly stored in separate lists/maps:
+  * `LegacyContactInfo` - node info and its shred version
+  * `Vote` - votes
+  * `EpochSlots` - epoch slots
+  * `DuplicateShred` - duplicated shreds
 * in case value already exists in `crds` it is checked for duplication - if value has newer timestamp it is updated
-* for each origin of the push message a list of its peers is checked - peers with too low stake will be pruned (https://github.com/solana-labs/solana/issues/3214)
+* for each origin of the push message a list of its peers is checked - peers with too low stake will be [pruned](https://github.com/solana-labs/solana/issues/3214)
 * for each origin prune messages are generated and sent
 * push messages are broadcasted further to node peers - peers are randomly selected such that they have not pruned source addresses of the messages
   * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
 
 #### Processing prune messages
-* only mesages not older than specified timeout are processed
+* expired messages are ignored
 * each entry from the list of prunes is added to the bloom filter - no more push messages from such nodes will be sent to their peers
 
 #### Processing ping messages
@@ -128,8 +134,8 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
 * before loop starts node send a push message containing `Version` and `NodeInstance`
 * push messages are generated:
   * all entries from `crds` with timestamps inside current wallclock window are gathered 
-  * for each entry nodes from active set are collected; pruned nodes are excluced unless entry should be pushed to the prunes too
-  * list of push messages is created - each node will have a list of `crds` values associated
+  * for each entry nodes from active set are collected; pruned nodes are excluded unless entry should be pushed to the prunes too
+  * list of push messages is created - each collected node will have a list of `crds` values associated
   * entries of below types will be dropped if their origins stake is below required value (currently 1 sol):
     * `LowestSlot`
     * `LegacyVersion`
@@ -141,9 +147,11 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
   * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) a list of ping requests is created
   * from each gossip address only nodes with highest stake are kept in the list
   * for each node weight is calculated as follows:
-$$ stake = {min(node\_self\_stake, node\_stake[i]) \over LAMPORTS\_PER\_SOL} $$
-$$ weight = 64 - stake.leading\_zeros() $$
-$$ weight = {(weight + 1)^2} $$
+```
+  stake = min(node_self_stake, node_stake[i]) / LAMPORTS_PER_SOL
+  weight = 64 - stake.leading_zeros()
+  weight = pow(weight + 1, 2)
+```
   where: 
     * `node_self_stake` - stake of "our" node, 
     * `node_stake[i]` - stake of i-th node from the list,
@@ -160,10 +168,10 @@ $$ weight = {(weight + 1)^2} $$
 * every 7500ms:
   * node sends a push requests containing the following data: `LegacyContactInfo`, `ContactInfo`, `NodeInstance`,
   * node refreshes its active set of nodes:
-    * list of valid (shred version matches or equals 0) and active (updated crds within 60 seconds from now) gossip nodes is collected
-    * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) * a list of ping requests is created
+    * list of valid (shred version matches or equals 0) and active (updated `crds` within 60 seconds from now) gossip nodes is collected
+    * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) a list of ping requests is created
     * from each gossip address only nodes with highest stake are kept in the list
-    * set of active nodes is rotated (*find out how!*)
+    * set of active nodes is rotated
     * pings are sent
 
 ### Sending data
