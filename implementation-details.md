@@ -34,7 +34,7 @@ flowchart TD
 
 ### Receiving data 
 
-Packet receiver thread binds to a socket on address 0.0.0.0 and specified port in case of running in `gossip` mode or on at random port in 8000-10000 range in case of `spy` mode. Packets are collected into a packet batch that is sent via `crossbeam-channel` for further processing. 
+Packet receiver thread binds to a socket on address 0.0.0.0 and specified port in case of running in `gossip` mode or at random port in 8000-10000 range in case of `spy` mode. Packets are collected into a packet batch that is further processed. 
 
 ### Consuming packets
 
@@ -46,7 +46,7 @@ Packets are deserialized into a `Protocol` type defined in the [gossip protocol]
 
 #### Data sanitization
 
-Sanitization excludes signature-verification checks as these are performed in the next step. Sanitize check should include but are not limited to:
+Sanitization excludes signature-verification checks as these are performed in the next step. Sanitize checks include but are not limited to:
 
 * all index values are in range
 * all values are within their static min/max bounds
@@ -74,10 +74,10 @@ Packets are filtered by shred version - only packets from origin with the same s
   * are filtered - in case of duplicates, only the most recent ones are kept
   * are inserted into `crds`
 * Pull requests are checked if coming from a valid address and if the address has responded to a ping request
-  * Ping packets are generated for addresses that need to be pinged
+  * ping packets are generated for addresses that need to be pinged
 * Pull responses are generated:
   * wallclock is checked for each pull request - too old requests are skipped
-  * `crds` values are filtered out using filters from pull requests 
+  * `crds` values are filtered out using provided filters from pull requests 
     * values with newer wallclock than pull reqest sender are also filtered out
   * for certain types (`LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots`) only `crds` values associated with nodes with enough stake (>= 1 sol) are retained
 * Pull responses and pings are sent
@@ -89,12 +89,12 @@ Pull responses are processed according to their timestamps:
 * hashes of outdated values which were not insterted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers to send them back
 
 #### Processing push messages
-* values not too old and not existing in `crds` are inserted, in case of some of the types values are additionaly stored in separate lists/maps:
+* fresh enough values and not existing in `crds` are inserted, in case of the types below values are additionaly stored in separate lists/maps:
   * `LegacyContactInfo` - node info and its shred version
   * `Vote` - votes
   * `EpochSlots` - epoch slots
   * `DuplicateShred` - duplicated shreds
-* in case value already exists in `crds` it is checked for duplication - if value has newer timestamp it is updated
+* in case value already exists in `crds` it is checked for duplication - if new value has a newer timestamp the existing one is updated
 * for each origin of the push message a list of its peers is checked - peers with too low stake will be [pruned](https://github.com/solana-labs/solana/issues/3214)
 * for each origin prune messages are generated and sent
 * push messages are broadcasted further to node peers - peers are randomly selected such that they have not pruned source addresses of the messages
@@ -102,7 +102,7 @@ Pull responses are processed according to their timestamps:
 
 #### Processing prune messages
 * expired messages are ignored
-* each entry from the list of prunes is added to the bloom filter - no more push messages from such nodes will be sent to their peers
+* each entry from the list of prunes is added to the bloom filter - no more push messages from such nodes will be sent to nodes peers
 
 #### Processing ping messages
 
@@ -131,7 +131,7 @@ flowchart TB
 
 The gossip loop runs in a separate thread. Each iteration the following steps are performed:
 
-* before loop starts node send a push message containing `Version` and `NodeInstance`
+* before loop starts node sends a push message containing `Version` and `NodeInstance`
 * push messages are generated:
   * all entries from `crds` with timestamps inside current wallclock window are gathered 
   * for each entry nodes from active set are collected; pruned nodes are excluded unless entry should be pushed to the prunes too
@@ -147,21 +147,17 @@ The gossip loop runs in a separate thread. Each iteration the following steps ar
   * for nodes which should be pinged (ones not pinged yet, or if cached pong is too old) a list of ping requests is created
   * from each gossip address only nodes with highest stake are kept in the list
   * for each node weight is calculated as follows:
-```
-  stake = min(node_self_stake, node_stake[i]) / LAMPORTS_PER_SOL
-  weight = 64 - stake.leading_zeros()
-  weight = pow(weight + 1, 2)
-```
-  where: 
+    `stake = min(node_self_stake, node_stake[i]) / LAMPORTS_PER_SOL`
+    `weight = 64 - stake.leading_zeros()`
+    `weight = pow(weight + 1, 2)`
+    where: 
     * `node_self_stake` - stake of "our" node, 
     * `node_stake[i]` - stake of i-th node from the list,
     * `stake.leading_zeros()` - leading zeros in the binary representation of the `stake` value (`u64` type)
-
   * `crds` filters are created from `crds` values, purged values and failed inserts
   * filters are divided among peers selected randomly using weights calculated above - the higher nodes weight, the more filters will be associated with it
   * additional randomly selected node which was not discovered yet is added to the list of nodes with all filters associated
-  * a pull request list is created from a list of filters and nodes self `LegacyContactInfo`
-  * pull requests are mapped into list of nodes
+  * a pull request list is created and mapped into list of nodes
 * push messages, pull requests and ping messages are sent
 * values older than specified timeout are purged from `crds`
 * old failed insterts are also purged (these are pull responses which failed to be inserted into `crds` - they are preserved to stop sender sending back the same outdated payload by adding them to the filter for next pull request)

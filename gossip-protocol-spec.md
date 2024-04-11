@@ -2,7 +2,7 @@
 
 This document describes the gossip protocol without implementation details which can be found [here](/implementation-details.md).
 
-Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which nodes need to deserialize. There are 6 types of messages:
+Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which need to be deserialized. There are 6 types of messages:
 * pull request
 * pull response
 * push message
@@ -10,21 +10,21 @@ Solana nodes communicate with each other and share data using the gossip protoco
 * ping
 * pong
 
-Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in [_Cluster Replicated Data Store_ (`crds`)](/implementation-details.md#cluster-replicated-data-store) which is synchronized between them via pull requests, push messages and pull responses.
+Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`) which is synchronized between them via pull requests, push messages and pull responses.
 
 ### Type definitions
-In the tables below fields are presented with their data types. This spec is using `Rust` notation:
+Fields described in the tables below have their types specified using Rust notation:
 * `u8` - 1 byte of unsigned data (8-bit unsigned integer)
 * `u16` - 16-bit unsigned integer
 * `u32` - 32-bit unsigned integer, and so on...
-* `usize` - on 32-bit architecture it's a 32-bit unsigned integer, on 64-bit one an 64-bit unsigned integer
 * `[u8]` - dynamic size array of 1 byte elements
 * `[u8, 32]` - static size array of 32 elements, with each element being 1 byte
 * `[[u8, 64]]` - a two dimensional array containing an arrays of 64 1 byte elements 
-* `enum` - an enumeration type which total size is 16 bytes
-* `struct` - a complex type, consisting of many elements of different types, which total size is 16 bytes
+* `enum` - an enumeration type - it is a Rust `enum` which in other languages (C for example) can be implemented as an `union`
+* `struct` - a complex type, consisting of many elements of different types
 
-The **Size** column in tables contains the size of data in bytes.
+The **Size** column in tables contains the size of data in bytes. Size of dynamic arrays contains additional _plus_ (`+`) sign, e.g. `32+` which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
+In case size of a particular complex data is unknown it is marked with `?`. The limit however is always 1232 bytes for the whole data packet.
 
 ## Message format
 
@@ -36,7 +36,7 @@ Data sent in the message is serialized from a `Protocol` type, which can be one 
 | Message                        | Data                      | Description |
 |--------------------------------|---------------------------|------------|
 | [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
-| [pull response](#pullresponse) | `Pubkey`, `[CrdsValue]`   | response to pull request |
+| [pull response](#pullresponse) | `Pubkey`, `[CrdsValue]`   | response to a pull request |
 | [push message](#pushmessage)   | `Pubkey`, `CrdsValue`     | sent by node to share its data |
 | [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of nodes which should be pruned |
 | [ping message](#pingmessage)   | `Ping`                    | a ping message |
@@ -81,20 +81,38 @@ enum Protocol
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `CrdsFilter` | `struct` | | a bloom filter representing things node already has |
-| `CrdsValue` | `struct` | | a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
+| `CrdsFilter` | `struct` | 37+ | a bloom filter representing things node already has |
+| `CrdsValue` | `struct` | ? | a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
 
 It is sent by node to ask the cluster for new information. It contains a bloom filter with things node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
 
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+``` rust
+struct CrdsFilter {
+    filter: Bloom,
+    mask: u64,
+    mask_bits: u32,
+}
+
+struct Bloom {
+    keys: Vec<u64>,
+    bits: BitVec<u64>,
+    num_bits_set: u64,
+}
+```
+
+</details>
 
 ### PullResponse
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8, 32]` | 32 | a public key of the origin |
-| `[CrdsValue]` | `[struct]` | | a list of new values  |
+| `[CrdsValue]` | `[struct]` | 8+ | a list of new values  |
 
-These are sent in response to `PullRequest`.
+These are sent in response to a `PullRequest`.
 
 
 ### PushMessage
@@ -102,7 +120,7 @@ These are sent in response to `PullRequest`.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8, 32]` | 32 | a public key of the origin |
-| `[CrdsValue]` | `[struct]` | | a list of values to share  |
+| `[CrdsValue]` | `[struct]` | 8+ | a list of values to share  |
 
 It is sent by nodes who want to share information with others. Node receiving the message checks for:
 - duplication - duplicated messages are dropped, node responses with prune message if message came from low staked node
@@ -119,7 +137,7 @@ The `CrdsValue` values that are sent in push messages, pull requests & pull resp
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `signature` | `[u8, 64]` | 64 | signature of origin |
-| `data` | `enum` | | data  |
+| `data` | `enum` | ? | data  |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -128,6 +146,21 @@ The `CrdsValue` values that are sent in push messages, pull requests & pull resp
 struct CrdsValue {
     signature: Signature,
     data: CrdsData,
+}
+
+enum CrdsData {
+    LegacyContactInfo(LegacyContactInfo),
+    Vote(VoteIndex, Vote),
+    LowestSlot(LowestSlotIndex, LowestSlot),
+    EpochSlots(EpochSlotsIndex, EpochSlots),
+    LegacyVersion(LegacyVersion),
+    Version(Version),
+    NodeInstance(NodeInstance),
+    DuplicateShred(DuplicateShredIndex, DuplicateShred),
+    SnapshotHashes(SnapshotHashes),
+    ContactInfo(ContactInfo),
+    RestartLastVotedForkSlots(RestartLastVotedForkSlots),
+    RestartHeaviestFork(RestartHeaviestFork),
 }
 ```
 </details>
@@ -178,16 +211,16 @@ enum CrdsData
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `id` | `[u8, 32]` | 32 | public key of the origin |
-| `gossip` | `struct` | 10 / 22* |  gossip protocol address |
-| `tvu` | `struct` | 10 / 22 | address to connect to for replication |
-| `tvu_quic` | `struct` | 10 / 22 | TVU over QUIC protocol |
-| `serve_repair_quic` | `struct` | 10 / 22 | repair service for QUIC protocol |
-| `tpu` | `struct` | 10 / 22 | transactions address |
-| `tpu_forwards` | `struct` | 10 / 22 | address to forward unprocessed transactions |
-| `tpu_vote` | `struct` | 10 / 22 | address for sending votes |
-| `rpc` | `struct` | 10 / 22 | address for JSON-RPC requests |
-| `rpc_pubsub` | `struct` | 10 / 22 | websocket for JSON-RPC push notifications |
-| `serve_repair` | `struct` | 10 / 22 | address for sending repair requests |
+| `gossip` | `struct` | 10 or 22 * |  gossip protocol address |
+| `tvu` | `struct` | 10 or 22 | address to connect to for replication |
+| `tvu_quic` | `struct` | 10 or 22 | TVU over QUIC protocol |
+| `serve_repair_quic` | `struct` | 10 or 22 | repair service for QUIC protocol |
+| `tpu` | `struct` | 10 or 22 | transactions address |
+| `tpu_forwards` | `struct` | 10 or 22 | address to forward unprocessed transactions |
+| `tpu_vote` | `struct` | 10 or 22 | address for sending votes |
+| `rpc` | `struct` | 10 or 22 | address for JSON-RPC requests |
+| `rpc_pubsub` | `struct` | 10 or 22 | websocket for JSON-RPC push notifications |
+| `serve_repair` | `struct` | 10 or 22 | address for sending repair requests |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
 | `shred_version` | `u16` | 2 | the shred version node has been configured to use |
 
@@ -255,21 +288,6 @@ struct Ipv6Addr {
 
 It's a validators vote on a fork. Contains a one byte index from vote tower (range 0 to 31) and vote transaction to execute by the leader.
 
-<details>
-  <summary>Solana client Rust implementation</summary>
-
- ```rust
- struct Vote {
-    from: Pubkey,
-    transaction: Transaction,
-    wallclock: u64,
-    slot: Option<Slot>,
-}
-
-type Slot = u64
-```
-</details>
-
 ##### Transaction
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -310,6 +328,15 @@ A vote transaction, contains a signature and a message with sequence of instruct
   <summary>Solana client Rust implementation</summary>
 
 ```rust
+struct Vote {
+    from: Pubkey,
+    transaction: Transaction,
+    wallclock: u64,
+    slot: Option<Slot>,
+}
+
+type Slot = u64
+
 struct Transaction {
     signature: Vec<Signature>,
     message: Message
