@@ -8,7 +8,7 @@ Solana nodes communicate with each other and share data using the gossip protoco
 * ping
 * pong
 
-Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`) which is synchronized between them via pull requests, push messages and pull responses.
+Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses.
 
 ## Message format
 
@@ -68,11 +68,11 @@ Fields described in the tables below have their types specified using Rust notat
 * `u32` - 32-bit unsigned integer, and so on...
 * `[u8]` - dynamic size array of 1 byte elements
 * `[u8; 32]` - fixed size array of 32 elements, with each element being 1 byte
-* `[[u8; 64]]` - a two dimensional array containing an arrays of 64 1 byte elements 
+* `[[u8; 64]]` - a two-dimensional array containing an arrays of 64 1-byte elements 
 * `LegacyVersion` - a complex type (either defined as struct or a Rust enum), consisting of many elements of different basic types
 
-The **Size** column in tables contains the size of data in bytes. Size of dynamic arrays contains additional _plus_ (`+`) sign, e.g. `32+` which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
-In case size of a particular complex data is unknown it is marked with `?`. The limit however is always 1232 bytes for the whole data packet.
+The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
+In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
 Data is serialized into a binary form as follows:
@@ -149,10 +149,10 @@ These are sent in response to a `PullRequest`.
 
 ### PushMessage
 It is sent by nodes who want to share information with others. Node receiving the message checks for:
-- duplication - duplicated messages are dropped, node responses with prune message if message came from low staked node
+- duplication - duplicated messages are dropped, and the node responds with a prune message if the message came from a low staked node
 - new data:
     - new information is stored in `crds` and replaces old value
-    - stores message in `pushed_once` which is used for detecting duplicates
+    - stores message in `pushed_once`, which is used for detecting duplicates
     - retransmits information to its peers
 - expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped
 
@@ -164,7 +164,7 @@ It is sent by nodes who want to share information with others. Node receiving th
 
 ## Data shared between nodes
 
-The `CrdsValue` values that are sent in push messages, pull requests & pull responses contain signature and the actual shared data:
+The `CrdsValue` values that are sent in push messages, pull requests & pull responses contain the signature and the actual shared data:
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -239,12 +239,12 @@ enum CrdsData
 </details>
 
 #### LegacyContactInfo
-Basic info about the node. Nodes send this message to introduce themselves and provide all addresses and ports that can be used by their peers to communicate with them. 
+Basic info about the node. Nodes send this message to introduce themselves to the cluster and provide all addresses and ports that their peers can use to communicate with them. 
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `id` | `[u8; 32]` | 32 | public key of the origin |
-| `gossip` | [`SocketAddr`](#socketaddr) | 10 or 22 * |  gossip protocol address |
+| `gossip` | [`SocketAddr`](#socketaddr) | 10 or 22 |  gossip protocol address |
 | `tvu` | [`SocketAddr`](#socketaddr) | 10 or 22 | address to connect to for replication |
 | `tvu_quic` | [`SocketAddr`](#socketaddr) | 10 or 22 | TVU over QUIC protocol |
 | `serve_repair_quic` | [`SocketAddr`](#socketaddr) | 10 or 22 | repair service for QUIC protocol |
@@ -256,8 +256,6 @@ Basic info about the node. Nodes send this message to introduce themselves and p
 | `serve_repair` | [`SocketAddr`](#socketaddr) | 10 or 22 | address for sending repair requests |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
 | `shred_version` | `u16` | 2 | the shred version node has been configured to use |
-
-\* _size of the address field is 10 bytes for IPv4 address and 22 bytes for IPv6 address_
 
 ##### SocketAddr
 An enum which can be either V4 or V6 socket address.
@@ -337,9 +335,7 @@ It's a validators vote on a fork. Contains a one byte index from vote tower (ran
 
 
 ##### Transaction
-A vote transaction, contains a signature and a message with sequence of instructions:
- * `message` - transaction message containing instructions to invoke:
- * `signature` - list of signatures equal to `num_required_signatures` for the message
+A vote transaction, contains a signature and a message with a sequence of instructions:
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -413,7 +409,7 @@ struct CompiledInstruction {
 </details>
 
 #### LowestSlot
-It is the first available slot in Solana [blockstore](https://docs.solanalabs.com/validator/blockstore) that contains any data. Contains a one byte index (deprecated) and the lowest slot number.
+It is the first available slot in Solana [blockstore](https://docs.solanalabs.com/validator/blockstore) that contains any data. Contains a one-byte index (deprecated) and the lowest slot number.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
