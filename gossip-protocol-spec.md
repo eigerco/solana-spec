@@ -75,7 +75,7 @@ The **Size** column in tables contains the size of data in bytes. The size of dy
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-Data is serialized into a binary form as follows:
+In the Rust implementation of the Solana node the data is serialized into a binary form using a [`bincode` crate](https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md) as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
 * array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be 64 bytes,
 * dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
