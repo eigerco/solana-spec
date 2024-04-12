@@ -69,13 +69,13 @@ Fields described in the tables below have their types specified using Rust notat
 * `[u8]` - dynamic size array of 1 byte elements
 * `[u8; 32]` - fixed size array of 32 elements, with each element being 1 byte
 * `[[u8; 64]]` - a two-dimensional array containing an arrays of 64 1-byte elements 
-* `LegacyVersion` - a complex type (either defined as struct or a Rust enum), consisting of many elements of different basic types
+* `MyStruct` - a complex type (either defined as struct or a Rust enum), consisting of many elements of different basic types
 
 The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-In the Rust implementation of the Solana node the data is serialized into a binary form using a [`bincode` crate](https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md) as follows:
+In the Rust implementation of the Solana node the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
 * array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be 64 bytes,
 * dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
@@ -110,12 +110,12 @@ A special care need to be taken when deserializing such enum as according to the
 
 
 ### PullRequest
-It is sent by node to ask the cluster for new information. It contains a bloom filter with things node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
+A node sends it to ask the cluster for new information. It contains a bloom filter with things the node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `CrdsFilter` | [`CrdsFilter`](#crdsfilter) | 37+ | a bloom filter representing things node already has |
-| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
+| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a value, usually a `LegacyContactInfo` of the node that sends the pull request containing node socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
 
 #### CrdsFilter
 
@@ -212,7 +212,7 @@ enum CrdsData {
 </details>
 
 ### CrdsData
-The `CrdsValue` data (`CrdsData`) can be one of:
+The `CrdsData` is  an enum and can be one of:
 * [LegacyContactInfo](#legacycontactinfo)
 * [Vote](#vote)
 * [LowestSlot](#lowestslot)
@@ -349,7 +349,7 @@ It's a validators vote on a fork. Contains a one byte index from vote tower (ran
 
 
 ##### Transaction
-A vote transaction, contains a signature and a message with a sequence of instructions:
+Contains a signature and a message with a sequence of instructions.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -423,7 +423,7 @@ struct CompiledInstruction {
 </details>
 
 #### LowestSlot
-It is the first available slot in Solana [blockstore](https://docs.solanalabs.com/validator/blockstore) that contains any data. Contains a one-byte index (deprecated) and the lowest slot number.
+It is the first available slot in Solana [blockstore][blockstore] that contains any data. Contains a one-byte index (deprecated) and the lowest slot number.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -444,7 +444,7 @@ It is the first available slot in Solana [blockstore](https://docs.solanalabs.co
 | `compressed_list` | `[u8]` | 8+ | compressed slots list | 
 
 ##### CompressionType
-Compression type enum
+Compression type enum.
 
 | Data | Description |
 |------|-------------|
@@ -478,3 +478,7 @@ enum CompressionType {
 }
 ```
 </details>
+
+
+[bincode]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
+[blockstore]: https://docs.solanalabs.com/validator/blockstore
