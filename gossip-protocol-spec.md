@@ -110,13 +110,27 @@ A special care need to be taken when deserializing such enum as according to the
 
 
 ### PullRequest
+It is sent by node to ask the cluster for new information. It contains a bloom filter with things node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `CrdsFilter` | `struct` | 37+ | a bloom filter representing things node already has |
-| `CrdsValue` | `struct` | ? | a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
+| `CrdsFilter` | [`CrdsFilter`](#crdsfilter) | 37+ | a bloom filter representing things node already has |
+| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a [value](#data-shared-between-nodes), usually a `LegacyContactInfo` of the node who send the pull request containing nodes socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
 
-It is sent by node to ask the cluster for new information. It contains a bloom filter with things node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
+#### CrdsFilter
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `filter` | [`Bloom`](#bloom) | 24+ | a bloom filter |
+| `mask` | `u64` | 8 | filter mask |
+| `mask_bits` | `u32` | 4 | filter mask bits |
+
+#### Bloom
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `keys` | `[u64]` | 8+ | keys |
+| `bits` | `[u64]` | 8+ | bits |
+| `num_bits_set` | `u64` | 8 | number of bits |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -143,7 +157,7 @@ These are sent in response to a `PullRequest`.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
-| `CrdsValuesList` | `[CrdsValue]` | 8+ | a list of new values  |
+| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of new values  |
 
 
 
@@ -159,7 +173,7 @@ It is sent by nodes who want to share information with others. Node receiving th
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
-| `CrdsValuesList` | `[CrdsValue]` | 8+ | a list of values to share  |
+| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
 
 
 ## Data shared between nodes
@@ -169,7 +183,7 @@ The `CrdsValue` values that are sent in push messages, pull requests & pull resp
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `signature` | `[u8; 64]` | 64 | signature of origin |
-| `data` | `CrdsData` | ? | data  |
+| `data` | [`CrdsData`](#crdsdata) | ? | data  |
 
 <details>
   <summary>Solana client Rust implementation</summary>
