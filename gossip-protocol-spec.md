@@ -66,21 +66,21 @@ Fields described in the tables below have their types specified using Rust notat
 * `u8` - 1 byte of unsigned data (8-bit unsigned integer)
 * `u16` - 16-bit unsigned integer
 * `u32` - 32-bit unsigned integer, and so on...
-* `[u8]` - dynamic size array of 1 byte elements
+* `[u8]` - dynamic size array of 1-byte elements
 * `[u8; 32]` - fixed size array of 32 elements, with each element being 1 byte
-* `[[u8; 64]]` - a two-dimensional array containing an arrays of 64 1-byte elements 
-* `MyStruct` - a complex type (either defined as struct or a Rust enum), consisting of many elements of different basic types
+* `[[u8; 64]]` - a two-dimensional array containing arrays of 64 1-byte elements 
+* `MyStruct` - a complex type (either defined as a struct or a Rust enum), consisting of many elements of different basic types
 
-The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
+The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of the array header containing array length. 
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-In the Rust implementation of the Solana node the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
+In the Rust implementation of the Solana node, the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
 * array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be 64 bytes,
 * dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
 * [enum types](#enum-types) contain a header with a 4-byte discriminant (tells which enum variant is selected) + additional data
-* struct fields are serialized one bye one using the rules above.
+* struct fields are serialized one by one using the rules above.
 
 ##### Enum types
 Enum types in Rust are more advanced than in other languages. Apart from _classic_ enum types, e.g.:
@@ -102,20 +102,27 @@ struct SomeType {
     y: u16,
 }
 ```
-In the first case the serialized object of `CompressionType` enum will only contain 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
+In the first case, the serialized object of `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
 * `Variant1`: 8 bytes
 * `Variant2`: 6 bytes (the sum of `x` and `y` fields of `SomeType` struct)
 
-A special care need to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
+Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
 ### PushMessage
-It is sent by nodes who want to share information with others. Node receiving the message checks for:
-- duplication - duplicated messages are dropped. Node responds with a prune message preiodically based on the nodes own stake, inbound peer stake and timeliness of the peer node
-- new data:
-    - new information is stored in `crds` and replaces old value
-    - duplicates are tracked in `ReceivedCache`
-    - retransmits information to its peers
-- expiration - messages are dropped when older than `PUSH_MSG_TIMEOUT` and `crds` table fills up
+It is sent by nodes who want to share information with others:
+* node gathers entries from `crds` with timestamps inside the current wallclock window (+/- 30s)
+* creates push messages that will be sent to peers from the active set
+* pruned nodes are excluded unless entry should be pushed to the prunes too.
+
+The above actions are performed periodically inside the `gossip loop`. 
+
+A node receiving the message checks for:
+* duplication - duplicated messages are dropped. The node responds with a prune message periodically based on the node's stake, inbound peer stake, and timeliness of the peer node
+* new data:
+    * new information is stored in `crds` and replaces the old value
+    * duplicates are tracked in `ReceivedCache`
+    * retransmits information to its peers, which are randomly selected such that they have not pruned source addresses of the messages
+* expiration - messages are dropped when older than `PUSH_MSG_TIMEOUT` and when `crds` table fills up.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -124,7 +131,18 @@ It is sent by nodes who want to share information with others. Node receiving th
 
 
 ### PullRequest
-A node sends it to ask the cluster for new information. It contains a bloom filter with things the node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
+A node sends it to ask the cluster for new information:
+* node collects a list of peers based on their stake (only the highest staked nodes are collected)
+* bloom filters are created from `crds` values, purged values, and failed inserts - these are things the node already contains
+* filters are randomly divided among peers using weights calculated from their stakes - weights are calculated based on the time since last picked and the natural log of the stake weight
+* node adds a `LegacyContactInfo` value to each pull request which contains its ports and addresses
+* pull requests are created and sent to peers.
+
+Nodes receiving pull requests:
+* filter and insert pull request values into their `crds`
+* gather all new values from their `crds`
+* filter them using the provided filters
+* send `PullResponse` to the origin of the request.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -166,7 +184,12 @@ struct Bloom {
 </details>
 
 ### PullResponse
-These are sent in response to a `PullRequest`.
+These are sent in response to a `PullRequest`. They contain filtered values from node `crds`. 
+
+Pull responses are processed by recipients according to the responses' timestamps:
+* responses that don't exist in the nodes `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
+* responses with expired timestamps are also inserted, but without updating owner timestamps
+* hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers from sending them back
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -336,7 +359,7 @@ struct Ipv6Addr {
 </details>
 
 #### Vote
-It's a validators vote on a fork. Contains a one byte index from vote tower (range 0 to 31) and vote transaction to execute by the leader.
+It's a validator's vote on a fork. Contains a one-byte index from the vote tower (range 0 to 31) and vote transaction to be executed by the leader.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
