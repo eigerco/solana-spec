@@ -108,13 +108,38 @@ In the first case, the serialized object of `CompressionType` enum will only con
 
 Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
+
+### Gossip loop
+
+```mermaid
+flowchart TB
+  A(Send push requests: Version, NodeInstance) --> C(Generate push messages)
+  subgraph Gossip loop
+  C --> D(Generate pull requests)
+  D --> E(Generate ping messages)
+  E --> F(Send generated messages)
+  end
+  F --> a1
+  subgraph Every 7500ms
+  a1(Send push requests: Version, ContactInfo, LegacyContactInfo) --> a2(Refresh active set of nodes)
+  end
+  a2 --> C
+```
+
+Each node runs a gossip loop where in each iteration the following actions are performed:
+* just before the loop starts node sends a push message containing `Version` and `NodeInstance`
+* [push messages](#pushmessage), [pull requests](#pullrequest) and ping messages are generated and sent
+* values older than the `active_timeout` are purged from `crds`
+* old failed inserts are also purged (these are pull responses that failed to be inserted into `crds` - they are preserved to stop the sender from sending back the same outdated payload by adding them to the filter for the next pull request)
+* every 7500ms node sends a push request containing `LegacyContactInfo`, `ContactInfo` and `NodeInstance` and refreshes its active set of nodes
+
 ### PushMessage
 It is sent by nodes who want to share information with others:
 * node gathers entries from `crds` with timestamps inside the current wallclock window (+/- 30s)
 * creates push messages that will be sent to peers from the active set
 * pruned nodes are excluded unless entry should be pushed to the prunes too.
 
-The above actions are performed periodically inside the `gossip loop`. 
+The above actions are performed periodically inside the [gossip loop](#gossip-loop). 
 
 A node receiving the message checks for:
 * duplication - duplicated messages are dropped. The node responds with a prune message periodically based on the node's stake, inbound peer stake, and timeliness of the peer node
@@ -131,12 +156,12 @@ A node receiving the message checks for:
 
 
 ### PullRequest
-A node sends it to ask the cluster for new information:
-* node collects a list of peers based on their stake (only the highest staked nodes are collected)
-* bloom filters are created from `crds` values, purged values, and failed inserts - these are things the node already contains
-* filters are randomly divided among peers using weights calculated from their stakes - weights are calculated based on the time since last picked and the natural log of the stake weight
-* node adds a `LegacyContactInfo` value to each pull request which contains its ports and addresses
-* pull requests are created and sent to peers.
+A node sends it to ask the cluster for new information. Inside the [gossip loop](#gossip-loop) node does the following each iteration:
+* collects a list of peers based on their stake (only the highest staked nodes are collected)
+* creates bloom filters from `crds` values, purged values, and failed inserts - these are things the node already contains
+* divides filters randomly among peers using weights calculated from their stakes - weights are calculated based on the time since last picked and the natural log of the stake weight
+* adds a `LegacyContactInfo` value to each pull request which contains its ports and addresses
+* created and sends pull requests to peers.
 
 Nodes receiving pull requests:
 * filter and insert pull request values into their `crds`
