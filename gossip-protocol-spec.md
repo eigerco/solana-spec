@@ -108,6 +108,20 @@ In the first case the serialized object of `CompressionType` enum will only cont
 
 A special care need to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
+### PushMessage
+It is sent by nodes who want to share information with others. Node receiving the message checks for:
+- duplication - duplicated messages are dropped. Node responds with a prune message preiodically based on the nodes own stake, inbound peer stake and timeliness of the peer node
+- new data:
+    - new information is stored in `crds` and replaces old value
+    - duplicates are tracked in `ReceivedCache`
+    - retransmits information to its peers
+- expiration - messages are dropped when older than `PUSH_MSG_TIMEOUT` and `crds` table fills up
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
+| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
+
 
 ### PullRequest
 A node sends it to ask the cluster for new information. It contains a bloom filter with things the node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
@@ -159,21 +173,6 @@ These are sent in response to a `PullRequest`.
 | `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
 | `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of new values  |
 
-
-
-### PushMessage
-It is sent by nodes who want to share information with others. Node receiving the message checks for:
-- duplication - duplicated messages are dropped, and the node responds with a prune message if the message came from a low staked node
-- new data:
-    - new information is stored in `crds` and replaces old value
-    - stores message in `pushed_once`, which is used for detecting duplicates
-    - retransmits information to its peers
-- expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped
-
-| Data | Type | Size | Description |
-|------|:----:|:----:|-------------|
-| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
-| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
 
 
 ## Data shared between nodes
