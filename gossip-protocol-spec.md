@@ -17,14 +17,15 @@ Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is
 
 Data sent in the message is serialized from a `Protocol` type, which can be one of:
 
-| Message                        | Data                      | Description |
-|--------------------------------|---------------------------|------------|
-| [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
-| [pull response](#pullresponse) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
-| [push message](#pushmessage)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
-| [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of nodes which should be pruned |
-| [ping message](#pingmessage)   | `Ping`                    | a ping message |
-| [pong message](#pongmessage)   | `Pong`                    | response to a ping |
+| Enum ID  | Message                        | Data                      | Description |
+|:--------:|--------------------------------|---------------------------|------------|
+| 0 | [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
+| 1 | [pull response](#pullresponse) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
+| 2 | [push message](#pushmessage)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
+| 3 | [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of nodes which should be pruned |
+| 4 | [ping message](#pingmessage)   | `Ping`                    | a ping message |
+| 5 | [pong message](#pongmessage)   | `Pong`                    | response to a ping |
+
 
 ```mermaid
 block-beta
@@ -134,12 +135,10 @@ Each node runs a gossip loop where in each iteration the following actions are p
 * every 7500ms node sends a push request containing `LegacyContactInfo`, `ContactInfo` and `NodeInstance` and refreshes its active set of nodes
 
 ### PushMessage
-It is sent by nodes who want to share information with others:
+It is sent by nodes who want to share information with others. Nodes gather data and send push messages periodically in the [gossip loop](#gossip-loop):
 * node gathers entries from `crds` with timestamps inside the current wallclock window (+/- 30s)
 * creates push messages that will be sent to peers from the active set
 * pruned nodes are excluded unless entry should be pushed to the prunes too.
-
-The above actions are performed periodically inside the [gossip loop](#gossip-loop). 
 
 A node receiving the message checks for:
 * duplication - duplicated messages are dropped. The node responds with a prune message periodically based on the node's stake, inbound peer stake, and timeliness of the peer node
@@ -156,17 +155,17 @@ A node receiving the message checks for:
 
 
 ### PullRequest
-A node sends it to ask the cluster for new information. Inside the [gossip loop](#gossip-loop) node does the following each iteration:
+A node sends it to ask the cluster for new information. In the [gossip loop](#gossip-loop) node does the following each iteration:
 * collects a list of peers based on their stake (only the highest staked nodes are collected)
 * creates bloom filters from `crds` values, purged values, and failed inserts - these are things the node already contains
 * divides filters randomly among peers using weights calculated from their stakes - weights are calculated based on the time since last picked and the natural log of the stake weight
-* adds a `LegacyContactInfo` value to each pull request which contains its ports and addresses
-* created and sends pull requests to peers.
+* adds a `LegacyContactInfo` value to each pull request which contains the node's ports and addresses
+* creates and sends pull requests to peers.
 
 Nodes receiving pull requests:
 * filter and insert pull request values into their `crds`
 * gather all new values from their `crds`
-* filter them using the provided filters
+* filter them using the filters provided in the pull requests
 * send `PullResponse` to the origin of the request.
 
 | Data | Type | Size | Description |
@@ -209,10 +208,10 @@ struct Bloom {
 </details>
 
 ### PullResponse
-These are sent in response to a `PullRequest`. They contain filtered values from node `crds`. 
+These are sent in response to a `PullRequest`. They contain filtered values from the node's `crds`. 
 
 Pull responses are processed by recipients according to the responses' timestamps:
-* responses that don't exist in the nodes `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
+* responses that don't exist in the node'   s `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
 * responses with expired timestamps are also inserted, but without updating owner timestamps
 * hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers from sending them back
 
@@ -260,20 +259,22 @@ enum CrdsData {
 
 ### CrdsData
 The `CrdsData` is  an enum and can be one of:
-* [LegacyContactInfo](#legacycontactinfo)
-* [Vote](#vote)
-* [LowestSlot](#lowestslot)
-* LegacySnapshotHashes
-* AccountsHashes
-* EpochSlots
-* LegacyVersion
-* Version
-* NodeInstance
-* DuplicateShred
-* SnapshotHashes
-* ContactInfo
-* RestartLastVotedForkSlots
-* RestartHeaviestFork
+| Enum ID | Type |
+|:-------:|------|
+| 0 | [LegacyContactInfo](#legacycontactinfo) |
+| 1 | [Vote](#vote) |
+| 2 | [LowestSlot](#lowestslot) |
+| 3 | LegacySnapshotHashes |
+| 4 | AccountsHashes |
+| 5 | EpochSlots |
+| 6 | LegacyVersion |
+| 7 | Version |
+| 8 | NodeInstance |
+| 9 | DuplicateShred |
+| 10 | SnapshotHashes |
+| 11 | ContactInfo |
+| 12 | RestartLastVotedForkSlots |
+| 13 | RestartHeaviestFork |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -320,10 +321,10 @@ Basic info about the node. Nodes send this message to introduce themselves to th
 
 ##### SocketAddr
 An enum which can be either V4 or V6 socket address.
-| Data | Type | Size | Description |
-|------|:----:|:----:|-------------|
-| `V4` | [`SocketAddrV4`](#socketaddrv4) | 10 | V4 socket address |
-| `V6` | [`SocketAddrV6`](#socketaddrv6) | 22 | V6 socket address |
+| Enum ID | Data | Type | Size | Description |
+|:-------:|------|:----:|:----:|-------------|
+| 0 | `V4` | [`SocketAddrV4`](#socketaddrv4) | 10 | V4 socket address |
+| 1 | `V6` | [`SocketAddrV6`](#socketaddrv6) | 22 | V6 socket address |
 
 ##### SocketAddrV4
 | Data | Type | Size | Description |
@@ -493,11 +494,11 @@ It is the first available slot in Solana [blockstore][blockstore] that contains 
 ##### CompressionType
 Compression type enum.
 
-| Data | Description |
-|------|-------------|
-| `Uncompressed` | uncompressed | 
-| `GZip` | gzip | 
-| `BZip2`| bzip2 | 
+| Enum ID | Data | Description |
+|:-------:|------|-------------|
+| 0 | `Uncompressed` | uncompressed | 
+| 1 | `GZip` | gzip | 
+| 2 |  `BZip2`| bzip2 | 
 
 <details>
   <summary>Solana client Rust implementation</summary>
