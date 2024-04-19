@@ -81,7 +81,7 @@ In case the size of a particular complex data is unknown it is marked with `?`. 
 #### Data serialization
 In the Rust implementation of the Solana node, the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
-* array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be 64 bytes,
+* array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be serialized as 32 16-bit elements which are equal to 64 bytes,
 * dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
 * bit vectors are serialized similar to dynamic arrays - their header contains 1-byte which tells whether there is any data in the vector, followed by 8-byte array length and the data,
 * [enum types](#enum-types) contain a header with a 4-byte discriminant (tells which enum variant is selected) + additional data,
@@ -115,43 +115,9 @@ In the first case, the serialized object of `CompressionType` enum will only con
 
 Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
-### Gossip loop
-
-```mermaid
-flowchart TB
-  A(Send push requests: Version, NodeInstance) --> C(Generate push messages)
-  subgraph Gossip loop
-  C --> D(Generate pull requests)
-  D --> E(Generate ping messages)
-  E --> F(Send generated messages)
-  end
-  F --> a1
-  subgraph Every 7500ms
-  a1(Send push requests: Version, ContactInfo, LegacyContactInfo) --> a2(Refresh active set of nodes)
-  end
-  a2 --> C
-```
-
-Each node runs a gossip loop where in each iteration the following actions are performed:
-* just before the loop starts node sends a push message containing `Version` and `NodeInstance`
-* [push messages](#pushmessage), [pull requests](#pullrequest) and [ping messages](#pingmessage) are generated and sent
-* values older than the `active_timeout` are purged from `crds`
-* old failed inserts are also purged (these are pull responses that failed to be inserted into `crds` - they are preserved to stop the sender from sending back the same outdated payload by adding them to the filter for the next pull request)
-* every 7500ms node sends a push request containing `LegacyContactInfo`, `ContactInfo` and `NodeInstance` and refreshes its active set of nodes
-
 ### PushMessage
-It is sent by nodes who want to share information with others. Nodes gather data and send push messages periodically in the [gossip loop](#gossip-loop):
-* node gathers entries from `crds` with timestamps inside the current wallclock window (+/- 30s)
-* creates push messages that will be sent to peers from the active set
-* pruned nodes are excluded unless entry should be pushed to the prunes too.
-
-A node receiving the message checks for:
-* duplication - duplicated messages are dropped
-* new data:
-    * new information is stored in `crds` and replaces the old value
-    * duplicates are tracked in `ReceivedCache`
-    * retransmits information to its peers, which are randomly selected such that they have not pruned source addresses of the messages
-* expiration - messages are dropped when older than `PUSH_MSG_TIMEOUT` and when `crds` table fills up.
+It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically in the gossip loop.
+Nodes receiving the messages check them for duplication, insert them into their `crds` in case the received value doesn't exist or is updated and transmit them further to their peers.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -172,18 +138,7 @@ enum Protocol {
 </details>
 
 ### PullRequest
-A node sends it to ask the cluster for new information. In the [gossip loop](#gossip-loop) node does the following each iteration:
-* collects a list of peers based on their stake (only the highest staked nodes are collected)
-* creates bloom filters from `crds` values, purged values, and failed inserts - these are things the node already contains
-* divides filters randomly among peers using weights calculated from their stakes - weights are calculated based on the time since last picked and the natural log of the stake weight
-* adds a `LegacyContactInfo` value to each pull request which contains the node's ports and addresses
-* creates and sends pull requests to peers.
-
-Nodes receiving pull requests:
-* filter and insert pull request values into their `crds`
-* gather all new values from their `crds`
-* filter them using the filters provided in the pull requests
-* send `PullResponse` to the origin of the request.
+A node sends it to ask the cluster for new information. It creates a list of filters on its `crds` values and sends them to its peers. The recipients of pull requests collect data from their `crds`, filter them using provided filters and send them back as [PullResponse](#pullresponse).
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -233,11 +188,6 @@ struct Bloom {
 ### PullResponse
 These are sent in response to a `PullRequest`. They contain filtered values from the node's `crds`. 
 
-Pull responses are processed by recipients according to the responses' timestamps:
-* responses that don't exist in the node's `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
-* responses with expired timestamps are also inserted, but without updating owner timestamps
-* hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers from sending them back
-
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
@@ -258,9 +208,7 @@ enum Protocol {
 
 
 ### PruneMessage
-It is sent to peers with a list of nodes that should be pruned. Prunes are sent periodically based on the node's stake, inbound peer stake, and timeliness of the peer node.
-
-The node receiving the prune message will add prunes to its bloom filter - no more push messages from such nodes will be sent to the node's peers. Also, push messages from the node will not be sent to the prunes, unless a given entry should be pushed to the prunes too.
+It is sent to peers with a list of nodes that should be pruned. No more push messages from pruned nodes will be sent to the node's peers.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -300,7 +248,7 @@ struct PruneData {
 
 
 ### PingMessage
-Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message generates and sends back the pong message which contains the hash of the ping token.
+Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with [PongMessage](#pongmessage)
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
