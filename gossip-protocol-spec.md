@@ -116,7 +116,8 @@ In the first case, the serialized object of `CompressionType` enum will only con
 Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
 ### PushMessage
-It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically in the gossip loop.
+It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
+
 Nodes receiving the messages check them for duplication, insert them into their `crds` in case the received value doesn't exist or is updated and transmit them further to their peers.
 
 | Data | Type | Size | Description |
@@ -138,7 +139,7 @@ enum Protocol {
 </details>
 
 ### PullRequest
-A node sends it to ask the cluster for new information. It creates a list of filters on its `crds` values and sends them to its peers. The recipients of pull requests collect data from their `crds`, filter them using provided filters and send them back as [PullResponse](#pullresponse).
+A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [PullResponse](#pullresponse) packed with missing `crds` values data for the pull request origin.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -150,8 +151,8 @@ A node sends it to ask the cluster for new information. It creates a list of fil
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `filter` | [`Bloom`](#bloom) | 25+ | a bloom filter |
-| `mask` | `u64` | 8 | filter mask |
-| `mask_bits` | `u32` | 4 | filter mask bits |
+| `mask` | `u64` | 8 | filter mask which defines the bloom filter |
+| `mask_bits` | `u32` | 4 | number of mask bits, also defines a number of bloom filters as `2^mask_bits` |
 
 #### Bloom
 | Data | Type | Size | Description |
@@ -186,7 +187,7 @@ struct Bloom {
 </details>
 
 ### PullResponse
-These are sent in response to a `PullRequest`. They contain filtered values from the node's `crds`. 
+These are sent in response to a `PullRequest`. They contain filtered values from the node's `crds` which the origin node is missing. 
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -208,12 +209,12 @@ enum Protocol {
 
 
 ### PruneMessage
-It is sent to peers with a list of nodes that should be pruned. No more push messages from pruned nodes will be sent to the node's peers.
+It is sent to peers with a list of nodes that should be pruned. No more push messages from pruned nodes should be sent by the recipient of this message to the origin.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8, 32]` | 32 | a public key of the origin |
-| `PruneData` | [`PruneData`](#prunedata) | 144+ | a structure which contains |
+| `PruneData` | [`PruneData`](#prunedata) | 144+ | a structure which contains prune details |
 
 
 #### PruneData
@@ -222,8 +223,8 @@ It is sent to peers with a list of nodes that should be pruned. No more push mes
 | `pubkey` |`[u8, 32]` | 32 | public key of the origin |
 | `prunes` | `[[u8, 32]]` | 8+ | public keys of nodes that should be pruned |
 | `signature` | `[u8, 64]` | 64 | signature of this message |
-| `destination` | `[u8, 32]` | 32 | a public key of the destination node of this message |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `destination` | `[u8, 32]` | 32 | a public key of the destination node for this message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -248,7 +249,7 @@ struct PruneData {
 
 
 ### PingMessage
-Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with [PongMessage](#pongmessage)
+Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with [PongMessage](#pongmessage).
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -383,7 +384,7 @@ Basic info about the node. Nodes send this message to introduce themselves to th
 | `rpc` | [`SocketAddr`](#socketaddr) | 10 or 22 | address for JSON-RPC requests |
 | `rpc_pubsub` | [`SocketAddr`](#socketaddr) | 10 or 22 | websocket for JSON-RPC push notifications |
 | `serve_repair` | [`SocketAddr`](#socketaddr) | 10 or 22 | address for sending repair requests |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 | `shred_version` | `u16` | 2 | the shred version node has been configured to use |
 
 ##### SocketAddr
@@ -459,7 +460,7 @@ It's a validator's vote on a fork. Contains a one-byte index from the vote tower
 | `index` | `u8` | 1 | vote tower index | 
 | `from` | `[u8; 32]` | 32 | public key of the origin |
 | `transaction`  | [`Transaction`](#transaction) | 59+ | a vote transaction, an atomically-committed sequence of instructions |
-| `wallclock`  | `u64` | 8 |  wallclock of the node that generated that message |
+| `wallclock`  | `u64` | 8 |  wallclock of the node that generated the message |
 | `slot`  | `u64` | 8 |  slot in which the vote was created |
 
 
@@ -557,7 +558,7 @@ It is the first available slot in Solana [blockstore][blockstore] that contains 
 | `lowest` | `u64` | 8 | the actual slot |
 | `slots` | `[u64]` | 8+ | _deprecated_ |
 | `stash` | [`[EpochIncompleteSlots]`](#epochincompleteslots) | 8+ | _deprecated_ |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 
 ##### EpochIncompleteSlots
 
@@ -619,7 +620,7 @@ _Deprecated_
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of the origin |
 | `hashes` | `[(u64, [u8, 32])]`| 8+ | a list of hashes grouped by slots |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 
 
 <details>
@@ -644,7 +645,7 @@ Contains a one-byte index and list of all slots from an epoch (epoch consists of
 | `index` | `u8` | 1 | index | 
 | `from` | `[u8, 32]` | 32 | public key of the origin |
 | `slots` | [`[CompressedSlots]`](#compressedslots) | 8+ | list of slots |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 
 ##### CompressedSlots
 | EnumID | Data | Type | Size | Description |
@@ -711,7 +712,7 @@ The older version of the Solana client the node is using.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `version` | [`LegacyVersion1`](#legacyversion1) | 7 or 11 | older version of the Solana used in 1.3.x and earlier releases |
 
 
@@ -748,7 +749,7 @@ The version of the Solana client the node is using.
 | Data | Type | Size | Description |
 |------|:----:|:-----:|-------------|
 | `from` | `[u8, 32]` | 32 | public key of origin |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 | `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Solana |
 
 
@@ -787,8 +788,8 @@ Contains node creation timestamp and randomly generated token.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
-| `timestamp` | `u64`| 8 | when the instance was created |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `timestamp` | `u64`| 8 | timestamp when the instance was created |
 | `token` | `u64`| 8 | randomly generated value at node instantiation |
 
 
@@ -812,7 +813,7 @@ A duplicated shred proof. Contains a 2-byte index followed by other data:
 |------|:----:|:----:|-------------|
 | `index` | `u16` | 2 | index |
 | `from` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `slot` | `u64`| 8 | slot when shreds where created |
 | `_unused` | `u32`| 4 | _unused_ |
 | `_unused_shred_type` | [`ShredType`](#shredtype) | 1 | _unused_ |
@@ -868,7 +869,7 @@ Contains hashes of full and incremental snapshots.
 | `from` | `[u8, 32]`| 32 | public key of origin |
 | `full` | `(u64, [u8, 32])`| 40 | hash and slot number of the full snapshot |
 | `incremental` | `[(u64, [u8, 32])]`| 8+ | list of hashes and slot numbers of incremental snapshots |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 
 
 <details>
@@ -890,9 +891,9 @@ Contact info of the node.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `pubkey` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `outset` | `u64`| 8 | timestamp when node instance was first created |
-| `shred_version` | `u16`| 2 | the shred version node has been configured to use |
+| `shred_version` | `u16`| 2 | the shred version the node has been configured to use |
 | `version` | [`Version`](#version-1) | 13+ | Solana version |
 | `addrs` | [`[IpAddr]`](#ipaddr) | 8+ | list of unique IP addresses |
 | `sockets` | [`[SocketEntry]`](#socketentry) | 8+ | list of unique sockets  |
@@ -979,7 +980,7 @@ Contains a list of last-voted fork slots.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | timestamp of data creation |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `offsets` | [`SlotsOffsets`](#slotsoffsets) | 12+ | list of slots |
 | `last_voted_slot` | `u64`| 8 | last voted slot |
 | `last_voted_hash` | `[u8, 32]`| 32 | |
@@ -1022,7 +1023,7 @@ Contains the heaviest fork.
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
-| `wallclock` | `u64`| 8 | timestamp of data creation |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `last_slot` | `u64`| 8 | last slot of the fork |
 | `last_hash` | `[u8, 32]`| 32 | hash of the last slot |
 | `observed_stake` | `u64`| 8 | |
