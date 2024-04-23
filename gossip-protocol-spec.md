@@ -22,7 +22,7 @@ Data sent in the message is serialized from a `Protocol` type, which can be one 
 | 0 | [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
 | 1 | [pull response](#pullresponse) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
 | 2 | [push message](#pushmessage)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
-| 3 | [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of nodes which should be pruned |
+| 3 | [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
 | 4 | [ping message](#pingmessage)   | `Ping`                    | a ping message |
 | 5 | [pong message](#pongmessage)   | `Pong`                    | response to a ping |
 
@@ -118,7 +118,12 @@ Special care needs to be taken when deserializing such enum as according to the 
 ### PushMessage
 It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
 
-Nodes receiving the messages check them for duplication, insert them into their `crds` in case the received value doesn't exist or is updated and transmit them further to their peers.
+A node receiving a set of PushMessages will:
+
+* check for duplicate `CrdsValue`s and drop them
+* insert new `CrdsValue`s into the `crds`
+* transmit newly inserted `CrdsValue`s to their peers via `PushMessage`
+
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -139,7 +144,7 @@ enum Protocol {
 </details>
 
 ### PullRequest
-A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [PullResponse](#pullresponse) packed with missing `crds` values data for the pull request origin.
+A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [PullResponse](#pullresponse) packed with missing `CrdsValue`s data for the pull request origin.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -209,7 +214,7 @@ enum Protocol {
 
 
 ### PruneMessage
-It is sent to peers with a list of nodes that should be pruned. No more push messages from pruned nodes should be sent by the recipient of this message to the origin.
+It is sent to peers with a list of origin nodes that should be pruned. No more push messages from pruned origin nodes should be sent by the recipient of this prune message to its sender.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
