@@ -1,10 +1,67 @@
 # Gossip protocol implementation details
 
-This document describes how the gossip protocol is implemented in Solana Rust client. Each Solana nodes participates in gossip in one of two modes:
+This document describes how the gossip protocol is implemented in Solana Rust client. Each Solana node participates in gossip in one of two modes:
 * `gossip` mode - node binds to specified UDP socket and fully participates in the gossip
-* `spy` mode - node binds to an UDP socket at random port in range [8000-10000] and spies on gossip via pull requests
+* `spy` mode - node binds to a UDP socket at a random port in a range [8000-10000] and spies on gossip via pull requests
 
-Nodes run several threads which are consuming & processing packets, running gossip loop and sending & receiving packets via UDP sockets. Threads communicate with each other using a thread-safe multi-consumer multi-producer channels for message passing.
+Nodes run several threads that are consuming & processing packets, running gossip loops and sending & receiving packets via UDP sockets. Threads communicate with each other using thread-safe multi-consumer multi-producer channels for message passing.
+
+## Propagating push messages over a cluster
+Consider the following cluster:
+```mermaid
+flowchart LR
+  A(A:1000) -- Ma --> B
+  A -- Ma --> C
+  B(B:1000) -- Ma --> C
+  C(C:100) -- Ma --> D
+  D(D:10) -- Ma --> E
+  C -- Ma --> E(E:1)
+```
+There are 5 nodes in the cluster with different stakes: node A with 1000 stake, B with 1000 stake, C with 100 stake and so on. Node A sends a message, `Ma`, which is propagated through the network by its peers.
+
+Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will come faster than from B (fewer hops), so B will be pruned and should not send any messages to C originating from A (C will ignore them anyway).
+
+Each node holds a _push active set of nodes_. It is a 25-element array, where each element (called a bucket) contains an index map of node public keys and bloom filters [containing pruned nodes](#pruning-nodes). Nodes are partitioned over buckets based on their stake: `min(log2(nodes_stake), 24)`.
+
+When a node receives a push message it first calculates the stake: `min(node_stake, origin_stake)`. It is then used to get the proper entry from the push active set. Each such entry contains up to 12 nodes with bloom filters assigned. If a node was already pruned by a potential message recipient for messages coming from a given origin (e.g. B was pruned by C for sending messages from A in the above example) the recipient is filtered out, unless a given value should be pushed by the prunes too (e.g. `NodeInstance`). Otherwise, a node is collected. Finally, a list of push messages is created for no more than `fanout` (9) amount of collected nodes. 
+
+The algorithm above guarantees that nodes with higher calculated stake will more likely send the message to their higher-staked peers. Nodes with lower calculated stake will send the message to randomly selected peers from the whole pool.
+
+### Receive cache
+
+Nodes store information about received messages in the `RecievedCache` - it's a map of message origins and `RecievedCacheEntry` (RCE) which is defined as:
+```rust
+struct RecievedCacheEntry {
+  nodes: HashMap<Pubkey, Score>,
+  num_upserts: usize
+}
+
+type Score = usize;
+```
+Whenever a new message of a given origin comes from a node, its score and `num_upserts` in RCE are incremented. Actually, the second node sending the same message will also have its score incremented (but not `num_upserts`). For every next node sending the same message from this origin, the score will remain unchanged. When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned:
+* node stakes are summed up starting from the highest score node and going down the list to nodes with lower score
+* when the sum of stakes reaches a defined fraction of the node's own stake (15%) all the remaining nodes (that is nodes whose stake was not summed yet) are pruned.
+
+## Getting missing data from the cluster
+Each node stores its data in the Cluster Replicated Data Store, `crds` (link here!). Nodes are constantly sending pull requests to obtain data they don't contain. To avoid receiving duplicates pull request contains a list of bloom filters with hashes of data the node already possesses. Bloom filter (link here) is a very fast filter that checks whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually isn't.
+
+For every data that is stored in `crds` its hash is stored in a `CrdsShards`. This is a structure holding vector `shards` and `shard_bits` which is a fixed value set to 12 currently, that tells how many first bits of a `crds` value hash should be used to partition the hashes in the `shards` vector. So, whenever new data is stored in `crds`, it is hashed and the first 12 bits of the hash are used as an index in the `shards` vector, below which the hash and the `crds` data index are stored. 
+
+When the bloom filter list is created, first its `mask_bits` is calculated as `((num_items / max_items).log().ceil()).max(0.0)`, where `num_items` is the number of current items we want to insert into the filter and `max_items` is the maximum number of items that can be inserted. The `mask_bits` value tells how many first bits of a value hash are used to calculate the index in the bloom filter list. Each value is then inserted into an appropriate filter based on the value's hash. Each filter contains a `mask` value which is an index calculated from the first `mask_bits` value of a hash. So for example, a filter with `mask = 5` and `mask_bits = 8` will contain all hashes whose first 8 bits are equal to value 5.
+
+Bloom filters are partitioned between randomly selected nodes. When a node receives a pull request it needs to gather data from `crds` and filter it using the provided filters. Node uses the `mask_bits`  value and `CrdsShards` to find the proper hashes of values from `crds`. There are 3 cases possible here:
+1. The `mask_bits` value equals 12 which is the same as `shard_bits` - in this case, the filter `mask` value can be used directly as an index in the `shards` vector. The node will gather all values from `crds` whose hashes belong to that index and filter them with the provided bloom filter. Values not existing in the filter will be sent back to the message origin in a pull response.
+
+2. The `mask_bits` value is smaller than `shard_bits` - values are gathered from all `shards` which first `mask_bits` bits of the indices are equal to the `mask` and then they are filtered using the bloom filter, and sent back in pull response.
+For example, if `mask_bits=4`, `shard_bits=12` and `mask=0001` we search for all shards which contain hashes starting with `0001`, e.g. `000100000000...`, `000100000001...`, and so on. 
+
+3. The `mask_bits` value is greater than `shard_bits` - here an index whose all bits match the first `shard_bits` of the `mask` is selected, and then values from that index are filtered such that the first `mask_bits` bits of their hashes are equal to the `mask`. Finally, values are filtered using the bloom filter and sent back in a pull response. 
+Example: `mask_bits=15`, `shard_bits=12`, `mask=000001000000001` - first we search for a shard with an index corresponding to the first 12 bits of the mask, `000001000000` which is 64 and then for hashes starting with `000001000000001...`
+
+### Pruning nodes
+When a node receives the same message from the same origin multiple times it sends the prune message to the node from which it received the duplicate. In the example shown in one of the previous chapters node C received a message originating from node A, `Ma`, from both nodes A and B. To avoid receiving such duplicates nodes are pruning nodes from sending them messages from a given origin. In the example above node C would send a prune message to node B with a list of pruned nodes containing A, which basically says - hey B don't send me messages originating from A anymore. 
+
+The node receiving the prune message will update its active set of nodes and add pruned nodes to the bloom filter of the message origin entry. In the example above node B receiving the prune message will add A into the bloom filters of node C in its active set of nodes. Then, whenever B would like to send a push message to C will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, B will not send it to C.
 
 ## Data management in gossip service
 
