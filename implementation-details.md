@@ -19,11 +19,16 @@ flowchart LR
 ```
 There are 5 nodes in the cluster with different stakes: node A with 1000 stake, B with 1000 stake, C with 100 stake and so on. Node A sends a message, `Ma`, which is propagated through the network by its peers.
 
-Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will come faster than from B (fewer hops), so B will be pruned and should not send any messages to C originating from A (C will ignore them anyway).
+Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will come faster than from B (fewer hops), so B will be informed to not send any messages to C originating from A (C will ignore them anyway) anymore.
 
-Each node holds a _push active set of nodes_. It is a 25-element array, where each element (called a bucket) contains an index map of node public keys and bloom filters [containing pruned nodes](#pruning-nodes). Nodes are partitioned over buckets based on their stake: `min(log2(nodes_stake), 24)`.
+Each node holds a _push active set of nodes_. It is a 25-element array, where each element, a `PushActiveSetEntry`, contains an index map of node public keys and bloom filters [containing pruned nodes](#pruning-nodes). Nodes are partitioned over the active set entries based on their stake: `min(log2(nodes_stake), 24)`.
 
-When a node receives a push message it first calculates the stake: `min(node_stake, origin_stake)`. It is then used to get the proper entry from the push active set. Each such entry contains up to 12 nodes with bloom filters assigned. If a node was already pruned by a potential message recipient for messages coming from a given origin (e.g. B was pruned by C for sending messages from A in the above example) the recipient is filtered out, unless a given value should be pushed by the prunes too (e.g. `NodeInstance`). Otherwise, a node is collected. Finally, a list of push messages is created for no more than `fanout` (9) amount of collected nodes. 
+```rust
+struct PushActiveSet([PushActiveSetEntry; 25])
+struct PushActiveSetEntry(IndexMap<Pubkey, ConcurrentBloom<Pubkey>>);
+```
+
+When a node receives a push message it first calculates the stake: `min(node_stake, origin_stake)`, where `node_stake` is the stake of the node that received the message, `origin_stake` is the stake of the message origin node. It is then used to get the proper entry from the push active set. Each such `PushActiveSetEntry` contains up to 12 nodes with bloom filters assigned. If an origin node was already pruned by a potential message recipient for messages coming from it (e.g. C sent a prune message to B to stop sending any message coming from A) the recipient is filtered out, unless a given value should be pushed from the prunes too (e.g. `NodeInstance`). Otherwise, a node is collected. Finally, a list of push messages is created for no more than `fanout` (9) amount of collected nodes. 
 
 The algorithm above guarantees that nodes with higher calculated stake will more likely send the message to their higher-staked peers. Nodes with lower calculated stake will send the message to randomly selected peers from the whole pool.
 
@@ -43,23 +48,102 @@ Whenever a new message of a given origin comes from a node, its score and `num_u
 * when the sum of stakes reaches a defined fraction of the node's own stake (15%) all the remaining nodes (that is nodes whose stake was not summed yet) are pruned.
 
 ## Getting missing data from the cluster
-Each node stores its data in the Cluster Replicated Data Store, `crds` (link here!). Nodes are constantly sending pull requests to obtain data they don't contain. To avoid receiving duplicates pull request contains a list of bloom filters with hashes of data the node already possesses. Bloom filter (link here) is a very fast filter that checks whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually isn't.
+### Crds
+Each node stores its data in the Cluster Replicated Data Store, `crds` (link here!). The `crds` contains a table which is an index map of `CrdsValueLabel` and `VersionedCrdsValue`. The `CrdsValueLabel` is an enum that can be one of the gossip protocol types (`Vote`, `NodeInstance`, etc.), while the `VersionedCrdsValue` stores the `CrdsValue` together with some meta data, like the timestamp when the value was updated or its hash.
 
-For every data that is stored in `crds` its hash is stored in a `CrdsShards`. This is a structure holding vector `shards` and `shard_bits` which is a fixed value set to 12 currently, that tells how many first bits of a `crds` value hash should be used to partition the hashes in the `shards` vector. So, whenever new data is stored in `crds`, it is hashed and the first 12 bits of the hash are used as an index in the `shards` vector, below which the hash and the `crds` data index are stored. 
+```rust
+struct Crds {
+  /// Stores the map of labels and values
+  table: IndexMap<CrdsValueLabel, VersionedCrdsValue>,
+  //...
+}
 
-When the bloom filter list is created, first its `mask_bits` is calculated as `((num_items / max_items).log().ceil()).max(0.0)`, where `num_items` is the number of current items we want to insert into the filter and `max_items` is the maximum number of items that can be inserted. The `mask_bits` value tells how many first bits of a value hash are used to calculate the index in the bloom filter list. Each value is then inserted into an appropriate filter based on the value's hash. Each filter contains a `mask` value which is an index calculated from the first `mask_bits` value of a hash. So for example, a filter with `mask = 5` and `mask_bits = 8` will contain all hashes whose first 8 bits are equal to value 5.
+struct VersionedCrdsValue {
+  ordinal: u64,
+  pub value: CrdsValue,
+  pub(crate) local_timestamp: u64,
+  pub(crate) value_hash: Hash,
+  num_push_dups: u8,
+}
 
-Bloom filters are partitioned between randomly selected nodes. When a node receives a pull request it needs to gather data from `crds` and filter it using the provided filters. Node uses the `mask_bits`  value and `CrdsShards` to find the proper hashes of values from `crds`. There are 3 cases possible here:
-1. The `mask_bits` value equals 12 which is the same as `shard_bits` - in this case, the filter `mask` value can be used directly as an index in the `shards` vector. The node will gather all values from `crds` whose hashes belong to that index and filter them with the provided bloom filter. Values not existing in the filter will be sent back to the message origin in a pull response.
+enum CrdsValueLabel {
+  LegacyContactInfo(Pubkey),
+  Vote(VoteIndex, Pubkey),
+  LowestSlot(Pubkey),
+  LegacySnapshotHashes(Pubkey),
+  EpochSlots(EpochSlotsIndex, Pubkey),
+  AccountsHashes(Pubkey),
+  LegacyVersion(Pubkey),
+  Version(Pubkey),
+  NodeInstance(Pubkey),
+  DuplicateShred(DuplicateShredIndex, Pubkey),
+  SnapshotHashes(Pubkey),
+  ContactInfo(Pubkey),
+  RestartLastVotedForkSlots(Pubkey),
+  RestartHeaviestFork(Pubkey),
+}
+```
 
-2. The `mask_bits` value is smaller than `shard_bits` - values are gathered from all `shards` which first `mask_bits` bits of the indices are equal to the `mask` and then they are filtered using the bloom filter, and sent back in pull response.
+Whenever the node receives a new value it stores it in the `crds` by creating a new `VersionedCrdsValue` or updating the existing one (in case updated data was received). Apart from that, a hash of the value is calculated and stored together with its `crds` index in a separate structure called `CrdsShards`. This structure is holding vector `shards` and `shard_bits` which is a fixed value set to 12 currently, which tells how many first bits of a `crds` value hash should be used to partition the hashes in the `shards` vector. So, when new data is stored in `crds`, it is hashed and the first 12 bits of the hash are used as an index in the `shards` vector, below which the hash and the `crds` index are stored. 
+```rust
+struct CrdsShards {
+  shards: Vec<IndexMap<usize, u64>>,
+  shard_bits: u32,
+}
+```
+The `CrdsShards` structure is used for a fast search for `CrdsValue`s when building a bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request.
+
+### Pull requests
+
+Nodes are constantly sending pull requests to obtain data they don't contain. To avoid receiving duplicates pull request contains a list of bloom filters with hashes of data the node already possesses. Bloom filter (link here) is a very fast filter that checks whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually isn't.
+
+When the bloom filter list is created, first its `mask_bits` is calculated as `((num_items / max_items).log().ceil()).max(0.0)`, where `num_items` is the number of current items we want to insert into the filter and `max_items` is the maximum number of items that can be inserted. The `mask_bits` value tells how many first bits of a value hash are used to calculate the index in the bloom filter list. Each value is then inserted into an appropriate filter, called `CrdsFilter`, based on the value's hash. Each filter contains a `mask` value which is an index calculated from the first `mask_bits` value of a hash. So for example, a filter with `mask = 5` and `mask_bits = 8` will contain all hashes whose first 8 bits are equal to value 5.
+
+```rust
+struct CrdsFilter {
+    pub filter: Bloom<Hash>,
+    mask: u64,
+    mask_bits: u32,
+}
+```
+
+Bloom filters are partitioned between nodes selected randomly using their weights calculated as follows: 
+    `stake = min(node_self_stake, node_stake[i]) / LAMPORTS_PER_SOL`
+    `weight = 64 - stake.leading_zeros()`
+    `weight = pow(weight + 1, 2)`
+    where: 
+    * `node_self_stake` - stake of "our" node, 
+    * `node_stake[i]` - stake of i-th node from the list,
+    * `stake.leading_zeros()` - leading zeros in the binary representation of the `stake` value (`u64` type)
+  
+The higher the node's weight, the more filters will be associated with it.
+
+Each pull request contains also a `CrdsValue`, which is a `LegacyContactInfo`. It contains details of the node that sent the pull request - a list of its IP addresses, pubkey and wallclock. 
+
+When a node receives a pull request it inserts the pull request value (`LegacyContactInfo`) into its `crds` (or updates the existing one in case of duplicate). Then, it filters the pull requests by checking whether they come from a valid address as pull responses need to be sent back to valid ones. Next, node checks the pull request wallclock value - if it's more than 15 seconds older (or newer) than the current timestamp request is ignored.
+
+For all remaining requests node needs to gather data from `crds` and filter it using the provided filters. Node uses the `mask_bits`  value and `CrdsShards` to find the proper hashes of values from `crds`. There are 3 cases possible here:
+1. The `mask_bits` value equals 12 which is the same as `shard_bits` - in this case, the filter `mask` value can be used directly as an index in the `shards` vector. The node will gather all values from `crds` whose hashes belong to that index in `shards` and filter them with the provided bloom filter. Values not existing in the filter will be collected for further processing.
+
+2. The `mask_bits` value is smaller than `shard_bits` - values are gathered from all `shards` which first `mask_bits` bits of the indices are equal to the `mask` and then they are filtered using the bloom filter, and collected.
 For example, if `mask_bits=4`, `shard_bits=12` and `mask=0001` we search for all shards which contain hashes starting with `0001`, e.g. `000100000000...`, `000100000001...`, and so on. 
 
-3. The `mask_bits` value is greater than `shard_bits` - here an index whose all bits match the first `shard_bits` of the `mask` is selected, and then values from that index are filtered such that the first `mask_bits` bits of their hashes are equal to the `mask`. Finally, values are filtered using the bloom filter and sent back in a pull response. 
-Example: `mask_bits=15`, `shard_bits=12`, `mask=000001000000001` - first we search for a shard with an index corresponding to the first 12 bits of the mask, `000001000000` which is 64 and then for hashes starting with `000001000000001...`
+3. The `mask_bits` value is greater than `shard_bits` - here an index whose all bits match the first `shard_bits` of the `mask` is selected, and then values from that index are filtered such that the first `mask_bits` bits of their hashes are equal to the `mask`. Finally, values are filtered using the bloom filter and collected. 
+Example: `mask_bits=15`, `shard_bits=12`, `mask=000001000000001` - first we search for a shard with an index corresponding to the first 12 bits of the mask, `000001000000` which is 64 and then for hashes starting with `000001000000001...` from the shard of that index.
+
+When all `crds` values are collected they are sent back to the origin of the pull request message in a [pull response](#pull-responses).
+
+### Pull responses
+Pull responses contain a list of `CrdsValue`s filtered using the bloom filter provided in a pull request. These are the data that the node sending pull request was missing in its `crds`.
+
+When a node receives a pull response it processes them according to their timestamps:
+* responses that don't exist in the nodes `crds` or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in `crds`
+* responses with expired timestamps are also inserted, but without updating owner timestamps
+* hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed_inserts` to prevent peers from sending them back
+
 
 ### Pruning nodes
-When a node receives the same message from the same origin multiple times it sends the prune message to the node from which it received the duplicate. In the example shown in one of the previous chapters node C received a message originating from node A, `Ma`, from both nodes A and B. To avoid receiving such duplicates nodes are pruning nodes from sending them messages from a given origin. In the example above node C would send a prune message to node B with a list of pruned nodes containing A, which basically says - hey B don't send me messages originating from A anymore. 
+When a node receives the same message from the same origin multiple times it sends the prune message to the node from which it received the duplicate. In the example shown in one of the previous chapters node C received a message originating from node A, `Ma`, from both nodes A and B. To avoid receiving such duplicates nodes are sending prune messages to their peers to stop sending them messages from a given origin. In the example above node C would send a prune message to node B with a list of pruned nodes containing A, which basically says - hey B don't send me messages originating from A anymore. 
 
 The node receiving the prune message will update its active set of nodes and add pruned nodes to the bloom filter of the message origin entry. In the example above node B receiving the prune message will add A into the bloom filters of node C in its active set of nodes. Then, whenever B would like to send a push message to C will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, B will not send it to C.
 
