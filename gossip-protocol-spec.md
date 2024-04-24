@@ -15,7 +15,14 @@ Each message contains data specific to its type: values that nodes share between
 > - _Node_ - a validator running the gossip
 > - _Peer_ - a node sending or receiving messages from the current node we're talking about
 > - _Origin_ - node, the original creator of the message
+> - _Cluster_ - a network of validators with a leader that produces blocks
 > - _Leader_ - node, the leader of the cluster in a given slot
+> - _Shred_ - is the smallest portion of block produced by a leader
+> - _Shred version_ - a cluster identification value
+> - _Fork_ - a fork occures when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
+> - _Epoch_ - it is a length of certain amount of blocks (_slots_) in which the validator schedule is defined
+> - _Slot_ - the period of time for which each leader ingests transactions and produces a block
+
 
 ## Message format
 
