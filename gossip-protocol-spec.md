@@ -10,6 +10,13 @@ Solana nodes communicate with each other and share data using the gossip protoco
 
 Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses.
 
+> [!Tip]
+> **Naming conventions used in this document**
+> _Node_ - a validator running the gossip
+> _Peer_ - a node sending or receiving messages from the current node we're talking about
+> _Origin_ - node, the original creator of the message
+> _Leader_ - node, the leader of the cluster in a given slot
+
 ## Message format
 
 Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). 
@@ -19,12 +26,12 @@ Data sent in the message is serialized from a `Protocol` type, which can be one 
 
 | Enum ID  | Message                        | Data                      | Description |
 |:--------:|--------------------------------|---------------------------|------------|
-| 0 | [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
-| 1 | [pull response](#pullresponse) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
-| 2 | [push message](#pushmessage)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
-| 3 | [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
-| 4 | [ping message](#pingmessage)   | `Ping`                    | a ping message |
-| 5 | [pong message](#pongmessage)   | `Pong`                    | response to a ping |
+| 0 | [pull request](#pull-request)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
+| 1 | [pull response](#pull-response) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
+| 2 | [push message](#push-message)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
+| 3 | [prune message](#prune-message) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
+| 4 | [ping message](#ping-message)   | `Ping`                    | a ping message |
+| 5 | [pong message](#pong-message)   | `Pong`                    | response to a ping |
 
 
 ```mermaid
@@ -109,20 +116,20 @@ struct SomeType {
     y: u16,
 }
 ```
-In the first case, the serialized object of `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
+In the first case, the serialized object of the `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
 * `Variant1`: 8 bytes
 * `Variant2`: 6 bytes (the sum of `x` and `y` fields of `SomeType` struct)
 
 Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
-### PushMessage
+### Push message
 It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
 
-A node receiving a set of PushMessages will:
+A node receiving a set of push messages will:
 
 * check for duplicate `CrdsValue`s and drop them
 * insert new `CrdsValue`s into the `crds`
-* transmit newly inserted `CrdsValue`s to their peers via `PushMessage`
+* transmit newly inserted `CrdsValue`s to their peers via push message.
 
 
 | Data | Type | Size | Description |
@@ -143,8 +150,8 @@ enum Protocol {
 
 </details>
 
-### PullRequest
-A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [PullResponse](#pullresponse) packed with missing `CrdsValue`s data for the pull request origin.
+### Pull request
+A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [pull response](#pull-response) packed with missing `CrdsValue`s data for the pull request origin.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -156,7 +163,7 @@ A node sends a pull request to ask the cluster for new information. It creates a
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `filter` | [`Bloom`](#bloom) | 25+ | a bloom filter |
-| `mask` | `u64` | 8 | filter mask which defines the bloom filter |
+| `mask` | `u64` | 8 | filter mask which defines the data stored in the bloom filter |
 | `mask_bits` | `u32` | 4 | number of mask bits, also defines a number of bloom filters as `2^mask_bits` |
 
 #### Bloom
@@ -191,8 +198,8 @@ struct Bloom {
 
 </details>
 
-### PullResponse
-These are sent in response to a `PullRequest`. They contain filtered values from the node's `crds` which the origin node is missing. 
+### Pull response
+These are sent in response to a [pull request](#pull-request). They contain filtered values from the node's `crds` which pull request origin is missing. 
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -213,7 +220,7 @@ enum Protocol {
 </details>
 
 
-### PruneMessage
+### Prune message
 It is sent to peers with a list of origin nodes that should be pruned. No more push messages from pruned origin nodes should be sent by the recipient of this prune message to its sender.
 
 | Data | Type | Size | Description |
@@ -225,8 +232,8 @@ It is sent to peers with a list of origin nodes that should be pruned. No more p
 #### PruneData
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `pubkey` |`[u8, 32]` | 32 | public key of the origin |
-| `prunes` | `[[u8, 32]]` | 8+ | public keys of nodes that should be pruned |
+| `pubkey` |`[u8, 32]` | 32 | public key of the origin of this message |
+| `prunes` | `[[u8, 32]]` | 8+ | public keys of origin nodes that should be pruned |
 | `signature` | `[u8, 64]` | 64 | signature of this message |
 | `destination` | `[u8, 32]` | 32 | a public key of the destination node for this message |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
@@ -253,8 +260,8 @@ struct PruneData {
 </details>
 
 
-### PingMessage
-Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with [PongMessage](#pongmessage).
+### Ping message
+Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with a [pong message](#pong-message).
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -283,8 +290,8 @@ struct Ping {
 </details>
 
 
-### PongMessage
-Sent by node as a response to `PingMessage`.
+### Pong message
+Sent by node as a response to the [ping message](#ping-message).
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -317,7 +324,7 @@ The `CrdsValue` values that are sent in push messages, pull requests & pull resp
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `signature` | `[u8; 64]` | 64 | signature of origin |
+| `signature` | `[u8; 64]` | 64 | signature of the origin |
 | `data` | [`CrdsData`](#crdsdata) | ? | data  |
 
 <details>
