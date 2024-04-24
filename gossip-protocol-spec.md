@@ -12,10 +12,10 @@ Each message contains data specific to its type: values that nodes share between
 
 > [!Tip]
 > **Naming conventions used in this document**
-> _Node_ - a validator running the gossip
-> _Peer_ - a node sending or receiving messages from the current node we're talking about
-> _Origin_ - node, the original creator of the message
-> _Leader_ - node, the leader of the cluster in a given slot
+> - _Node_ - a validator running the gossip
+> - _Peer_ - a node sending or receiving messages from the current node we're talking about
+> - _Origin_ - node, the original creator of the message
+> - _Leader_ - node, the leader of the cluster in a given slot
 
 ## Message format
 
