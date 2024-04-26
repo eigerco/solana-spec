@@ -10,6 +10,20 @@ Solana nodes communicate with each other and share data using the gossip protoco
 
 Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses.
 
+> [!Tip]
+> **Naming conventions used in this document**
+> - _Node_ - a validator running the gossip
+> - _Peer_ - a node sending or receiving messages from the current node we're talking about
+> - _Origin_ - node, the original creator of the message
+> - _Cluster_ - a network of validators with a leader that produces blocks
+> - _Leader_ - node, the leader of the cluster in a given slot
+> - _Shred_ - is the smallest portion of block produced by a leader
+> - _Shred version_ - a cluster identification value
+> - _Fork_ - a fork occures when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
+> - _Epoch_ - it is a length of certain amount of blocks (_slots_) in which the validator schedule is defined
+> - _Slot_ - the period of time for which each leader ingests transactions and produces a block
+
+
 ## Message format
 
 Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). 
@@ -17,14 +31,15 @@ Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is
 
 Data sent in the message is serialized from a `Protocol` type, which can be one of:
 
-| Message                        | Data                      | Description |
-|--------------------------------|---------------------------|------------|
-| [pull request](#pullrequest)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
-| [pull response](#pullresponse) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
-| [push message](#pushmessage)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
-| [prune message](#prunemessage) | `Pubkey`, `PruneData`     | sent to peers with a list of nodes which should be pruned |
-| [ping message](#pingmessage)   | `Ping`                    | a ping message |
-| [pong message](#pongmessage)   | `Pong`                    | response to a ping |
+| Enum ID  | Message                        | Data                      | Description |
+|:--------:|--------------------------------|---------------------------|------------|
+| 0 | [pull request](#pull-request)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
+| 1 | [pull response](#pull-response) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
+| 2 | [push message](#push-message)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
+| 3 | [prune message](#prune-message) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
+| 4 | [ping message](#ping-message)   | `Ping`                    | a ping message |
+| 5 | [pong message](#pong-message)   | `Pong`                    | response to a ping |
+
 
 ```mermaid
 block-beta
@@ -48,11 +63,10 @@ block-beta
   <summary>Solana client Rust implementation</summary>
 
 ``` rust
-enum Protocol
-{
+enum Protocol {
     PullRequest(CrdsFilter, CrdsValue),
-    PullResponse(Pubkey, [CrdsValue]),
-    PushMessage(Pubkey, [CrdsValue]),
+    PullResponse(Pubkey, Vec<CrdsValue>),
+    PushMessage(Pubkey, Vec<CrdsValue>),
     PruneMessage(Pubkey, PruneData),
     PingMessage(Ping),
     PongMessage(Pong)
@@ -66,21 +80,28 @@ Fields described in the tables below have their types specified using Rust notat
 * `u8` - 1 byte of unsigned data (8-bit unsigned integer)
 * `u16` - 16-bit unsigned integer
 * `u32` - 32-bit unsigned integer, and so on...
-* `[u8]` - dynamic size array of 1 byte elements
+* `[u8]` - dynamic size array of 1-byte elements
 * `[u8; 32]` - fixed size array of 32 elements, with each element being 1 byte
-* `[[u8; 64]]` - a two-dimensional array containing an arrays of 64 1-byte elements 
-* `MyStruct` - a complex type (either defined as struct or a Rust enum), consisting of many elements of different basic types
+* `[[u8; 64]]` - a two-dimensional array containing arrays of 64 1-byte elements 
+* `b[u8]` - a bit vector containing 1-byte elements
+* `u32 | None` - an option type, meaning an element is either `u32` (in this case) or `None`
+* `(u32, [u8, 16])` - a tuple that contains two elements - one is a 32-bit integer, the second one is a 16-element array of bytes
+* `MyStruct` - a complex type (either defined as a struct or a Rust enum), consisting of 
+many elements of different basic types
 
-The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of array header containing array length. 
+The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of the array header containing array length. 
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-In the Rust implementation of the Solana node the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
+In the Rust implementation of the Solana node, the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
-* array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be 64 bytes,
+* array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be serialized as 32 16-bit elements which are equal to 64 bytes,
 * dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
-* [enum types](#enum-types) contain a header with a 4-byte discriminant (tells which enum variant is selected) + additional data
-* struct fields are serialized one bye one using the rules above.
+* bit vectors are serialized similar to dynamic arrays - their header contains 1-byte which tells whether there is any data in the vector, followed by 8-byte array length and the data,
+* [enum types](#enum-types) contain a header with a 4-byte discriminant (tells which enum variant is selected) + additional data,
+* option types are serialized using a 1-byte discriminant followed by the bytes of data. If a value is `None` discriminant is set to 0 and the data part is empty, otherwise it is set to 1 with data serialized according to its type,
+* struct fields are serialized one by one using the rules above,
+* tuples are serialized like structs.
 
 ##### Enum types
 Enum types in Rust are more advanced than in other languages. Apart from _classic_ enum types, e.g.:
@@ -102,15 +123,42 @@ struct SomeType {
     y: u16,
 }
 ```
-In the first case the serialized object of `CompressionType` enum will only contain 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
+In the first case, the serialized object of the `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
 * `Variant1`: 8 bytes
 * `Variant2`: 6 bytes (the sum of `x` and `y` fields of `SomeType` struct)
 
-A special care need to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
+Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
+
+### Push message
+It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
+
+A node receiving a set of push messages will:
+
+* check for duplicate `CrdsValue`s and drop them
+* insert new `CrdsValue`s into the `crds`
+* transmit newly inserted `CrdsValue`s to their peers via push message.
 
 
-### PullRequest
-A node sends it to ask the cluster for new information. It contains a bloom filter with things the node already has. Nodes receiving pull requests gather all new values from their `crds`, filter them using provided filters and send `PullResponse` to the origin of the request.
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
+| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum Protocol {
+    //...
+    PushMessage(Pubkey, Vec<CrdsValue>),
+    //...
+}
+```
+
+</details>
+
+### Pull request
+A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [pull response](#pull-response) packed with missing `CrdsValue`s data for the pull request origin.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -121,21 +169,27 @@ A node sends it to ask the cluster for new information. It contains a bloom filt
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `filter` | [`Bloom`](#bloom) | 24+ | a bloom filter |
-| `mask` | `u64` | 8 | filter mask |
-| `mask_bits` | `u32` | 4 | filter mask bits |
+| `filter` | [`Bloom`](#bloom) | 25+ | a bloom filter |
+| `mask` | `u64` | 8 | filter mask which defines the data stored in the bloom filter |
+| `mask_bits` | `u32` | 4 | number of mask bits, also defines a number of bloom filters as `2^mask_bits` |
 
 #### Bloom
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `keys` | `[u64]` | 8+ | keys |
-| `bits` | `[u64]` | 8+ | bits |
+| `bits` | `b[u64]` | 9+ | bits |
 | `num_bits_set` | `u64` | 8 | number of bits |
 
 <details>
   <summary>Solana client Rust implementation</summary>
 
 ``` rust
+
+enum Protocol {
+    PullRequest(CrdsFilter, CrdsValue),
+    //...
+}
+
 struct CrdsFilter {
     filter: Bloom,
     mask: u64,
@@ -151,30 +205,125 @@ struct Bloom {
 
 </details>
 
-### PullResponse
-These are sent in response to a `PullRequest`.
+### Pull response
+These are sent in response to a [pull request](#pull-request). They contain filtered values from the node's `crds` which pull request origin is missing. 
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
 | `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of new values  |
 
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum Protocol {
+    //...
+    PullResponse(Pubkey, Vec<CrdsValue>),
+    //...
+}
+```
+
+</details>
 
 
-### PushMessage
-It is sent by nodes who want to share information with others. Node receiving the message checks for:
-- duplication - duplicated messages are dropped, and the node responds with a prune message if the message came from a low staked node
-- new data:
-    - new information is stored in `crds` and replaces old value
-    - stores message in `pushed_once`, which is used for detecting duplicates
-    - retransmits information to its peers
-- expiration - messages older than `PUSH_MSG_TIMEOUT` are dropped
+### Prune message
+It is sent to peers with a list of origin nodes that should be pruned. No more push messages from pruned origin nodes should be sent by the recipient of this prune message to its sender.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
-| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
+| `Pubkey` | `[u8, 32]` | 32 | a public key of the origin |
+| `PruneData` | [`PruneData`](#prunedata) | 144+ | a structure which contains prune details |
 
+
+#### PruneData
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `pubkey` |`[u8, 32]` | 32 | public key of the origin of this message |
+| `prunes` | `[[u8, 32]]` | 8+ | public keys of origin nodes that should be pruned |
+| `signature` | `[u8, 64]` | 64 | signature of this message |
+| `destination` | `[u8, 32]` | 32 | a public key of the destination node for this message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum Protocol {
+    //...
+    PruneMessage(Pubkey, PruneData),
+    //...
+}
+
+struct PruneData {
+    pubkey: Pubkey,
+    prunes: Vec<Pubkey,
+    signature: Signature,
+    destination: Pubkey,
+    wallclock: u64,
+}
+```
+
+</details>
+
+
+### Ping message
+Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with a [pong message](#pong-message).
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` |`[u8, 32]` | 32 | public key of the origin |
+| `token` |`[u8, 32]` | 32 | 32 bytes token |
+| `signature` |`[u8, 64]` | 64 | signature of the message |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum Protocol {
+    //...
+    PingMessage(Ping),
+    //...
+}
+
+struct Ping {
+    from: Pubkey,
+    token: [u8, 32],
+    signature: Signature,
+}
+```
+
+</details>
+
+
+### Pong message
+Sent by node as a response to the [ping message](#ping-message).
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` |`[u8, 32]` | 32 | public key of the origin |
+| `hash` |`[u8, 32]` | 32 | hash of the received ping token |
+| `signature` |`[u8, 64]` | 64 | signature of the message |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum Protocol {
+    //...
+    PongMessage(Pong)
+}
+
+struct Pong {
+    from: Pubkey,
+    hash: Hash,
+    signature: Signature,
+}
+```
+
+</details>
 
 ## Data shared between nodes
 
@@ -182,7 +331,7 @@ The `CrdsValue` values that are sent in push messages, pull requests & pull resp
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `signature` | `[u8; 64]` | 64 | signature of origin |
+| `signature` | `[u8; 64]` | 64 | signature of the origin |
 | `data` | [`CrdsData`](#crdsdata) | ? | data  |
 
 <details>
@@ -193,47 +342,33 @@ struct CrdsValue {
     signature: Signature,
     data: CrdsData,
 }
-
-enum CrdsData {
-    LegacyContactInfo(LegacyContactInfo),
-    Vote(VoteIndex, Vote),
-    LowestSlot(LowestSlotIndex, LowestSlot),
-    EpochSlots(EpochSlotsIndex, EpochSlots),
-    LegacyVersion(LegacyVersion),
-    Version(Version),
-    NodeInstance(NodeInstance),
-    DuplicateShred(DuplicateShredIndex, DuplicateShred),
-    SnapshotHashes(SnapshotHashes),
-    ContactInfo(ContactInfo),
-    RestartLastVotedForkSlots(RestartLastVotedForkSlots),
-    RestartHeaviestFork(RestartHeaviestFork),
-}
 ```
 </details>
 
 ### CrdsData
-The `CrdsData` is  an enum and can be one of:
-* [LegacyContactInfo](#legacycontactinfo)
-* [Vote](#vote)
-* [LowestSlot](#lowestslot)
-* LegacySnapshotHashes
-* AccountsHashes
-* EpochSlots
-* LegacyVersion
-* Version
-* NodeInstance
-* DuplicateShred
-* SnapshotHashes
-* ContactInfo
-* RestartLastVotedForkSlots
-* RestartHeaviestFork
+The `CrdsData` is an enum and can be one of:
+| Enum ID | Type |
+|:-------:|------|
+| 0 | [LegacyContactInfo](#legacycontactinfo) |
+| 1 | [Vote](#vote) |
+| 2 | [LowestSlot](#lowestslot) |
+| 3 | [LegacySnapshotHashes](#legacysnapshothashes-accountshashes) (_deprecated_) |
+| 4 | [AccountsHashes](#legacysnapshothashes-accountshashes) (_deprecated_) |
+| 5 | [EpochSlots](#epochslots) |
+| 6 | [LegacyVersion](#legacyversion) |
+| 7 | [Version](#version) |
+| 8 | [NodeInstance](#nodeinstance) |
+| 9 | [DuplicateShred](#duplicateshred) |
+| 10| [SnapshotHashes](#snapshothashes) |
+| 11 | [ContactInfo](#contactinfo) |
+| 12 | [RestartLastVotedForkSlots](#restartlastvotedforkslots) |
+| 13 | [RestartHeaviestFork](#restartheaviestfork) |
 
 <details>
   <summary>Solana client Rust implementation</summary>
 
 ```rust
-enum CrdsData
-{
+enum CrdsData {
     LegacyContactInfo(LegacyContactInfo),
     Vote(VoteIndex, Vote),
     LowestSlot(LowestSlotIndex, LowestSlot),
@@ -268,15 +403,15 @@ Basic info about the node. Nodes send this message to introduce themselves to th
 | `rpc` | [`SocketAddr`](#socketaddr) | 10 or 22 | address for JSON-RPC requests |
 | `rpc_pubsub` | [`SocketAddr`](#socketaddr) | 10 or 22 | websocket for JSON-RPC push notifications |
 | `serve_repair` | [`SocketAddr`](#socketaddr) | 10 or 22 | address for sending repair requests |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 | `shred_version` | `u16` | 2 | the shred version node has been configured to use |
 
 ##### SocketAddr
-An enum which can be either V4 or V6 socket address.
-| Data | Type | Size | Description |
-|------|:----:|:----:|-------------|
-| `V4` | [`SocketAddrV4`](#socketaddrv4) | 10 | V4 socket address |
-| `V6` | [`SocketAddrV6`](#socketaddrv6) | 22 | V6 socket address |
+An enum, can be either V4 or V6 socket address.
+| Enum ID | Data | Type | Size | Description |
+|:-------:|------|:----:|:----:|-------------|
+| 0 | `V4` | [`SocketAddrV4`](#socketaddrv4) | 10 | V4 socket address |
+| 1 | `V6` | [`SocketAddrV6`](#socketaddrv6) | 22 | V6 socket address |
 
 ##### SocketAddrV4
 | Data | Type | Size | Description |
@@ -337,14 +472,14 @@ struct Ipv6Addr {
 </details>
 
 #### Vote
-It's a validators vote on a fork. Contains a one byte index from vote tower (range 0 to 31) and vote transaction to execute by the leader.
+It's a validator's vote on a fork. Contains a one-byte index from the vote tower (range 0 to 31) and vote transaction to be executed by the leader.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `index` | `u8` | 1 | vote tower index | 
 | `from` | `[u8; 32]` | 32 | public key of the origin |
 | `transaction`  | [`Transaction`](#transaction) | 59+ | a vote transaction, an atomically-committed sequence of instructions |
-| `wallclock`  | `u64` | 8 |  wallclock of the node that generated that message |
+| `wallclock`  | `u64` | 8 |  wallclock of the node that generated the message |
 | `slot`  | `u64` | 8 |  slot in which the vote was created |
 
 
@@ -387,6 +522,15 @@ Contains a signature and a message with a sequence of instructions.
   <summary>Solana client Rust implementation</summary>
 
 ```rust
+
+enum CrdsData {
+    //...
+    Vote(VoteIndex, Vote),
+    //...
+}
+
+type VoteIndex = u8;
+
 struct Vote {
     from: Pubkey,
     transaction: Transaction,
@@ -433,7 +577,7 @@ It is the first available slot in Solana [blockstore][blockstore] that contains 
 | `lowest` | `u64` | 8 | the actual slot |
 | `slots` | `[u64]` | 8+ | _deprecated_ |
 | `stash` | [`[EpochIncompleteSlots]`](#epochincompleteslots) | 8+ | _deprecated_ |
-| `wallclock` | `u64` | 8 | wallclock of the node that generated that message |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 
 ##### EpochIncompleteSlots
 
@@ -446,16 +590,25 @@ It is the first available slot in Solana [blockstore][blockstore] that contains 
 ##### CompressionType
 Compression type enum.
 
-| Data | Description |
-|------|-------------|
-| `Uncompressed` | uncompressed | 
-| `GZip` | gzip | 
-| `BZip2`| bzip2 | 
+| Enum ID | Data | Description |
+|:-------:|------|-------------|
+| 0 | `Uncompressed` | uncompressed | 
+| 1 | `GZip` | gzip | 
+| 2 |  `BZip2`| bzip2 | 
 
 <details>
   <summary>Solana client Rust implementation</summary>
 
 ```rust
+
+enum CrdsData {
+    //...
+    LowestSlot(LowestSlotIndex, LowestSlot),
+    //...
+}
+
+type LowestSlotIndex = u8;
+
 struct LowestSlot {
     from: Pubkey,
     root: Slot,
@@ -479,6 +632,437 @@ enum CompressionType {
 ```
 </details>
 
+#### LegacySnapshotHashes, AccountsHashes
+_Deprecated_
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of the origin |
+| `hashes` | `[(u64, [u8, 32])]`| 8+ | a list of hashes grouped by slots |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct AccountsHashes {
+    from: Pubkey,
+    hashes: Vec<(Slot, Hash)>,
+    wallclock: u64,
+}
+
+type LegacySnapshotHashes = AccountsHashes;
+```
+</details>
+
+#### EpochSlots
+Contains a one-byte index and list of all slots from an epoch (epoch consists of around 432000 slots). There can be 256 epoch slots in total.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `index` | `u8` | 1 | index | 
+| `from` | `[u8, 32]` | 32 | public key of the origin |
+| `slots` | [`[CompressedSlots]`](#compressedslots) | 8+ | list of slots |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
+
+##### CompressedSlots
+| EnumID | Data | Type | Size | Description |
+|:------:|------|:----:|:----:|-------------|
+| 0 | `Flate2` | [`Flate2`](#flate2) | 24+ | Flate 2 compression |
+| 1 | `Uncompressed` | [`Uncompressed`](#uncompressed) | 25+ | no compression |
+
+##### Flate2
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `first_slot` | `u64` | 8 | first slot number |
+| `num` | `u64` | 8 | number of slots |
+| `compressed` | `[u8]` | 8+ | bytes array of compressed slots |
+
+##### Uncompressed
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `first_slot` | `u64` | 8 | first slot number |
+| `num` | `u64` | 8 | number of slots |
+| `slots` | `b[u8]` | 9+ | bits array of slots |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum CrdsData {
+    //...
+    EpochSlots(EpochSlotsIndex, EpochSlots),
+    //...
+}
+
+type EpochSlotsIndex = u8;
+
+struct EpochSlots {
+    from: Pubkey,
+    slots: Vec<CompressedSlots>,
+    wallclock: u64,
+}
+
+enum CompressedSlots {
+   Flate2(Flate2),
+   Uncompressed(Uncompressed),
+}
+
+struct Flate2 {
+    first_slot: Slot,
+    num: usize,
+    compressed: Vec<u8>
+}
+
+struct Uncompressed {
+    first_slot: Slot,
+    num: usize,
+    slots: BitVec<u8>,
+}
+```
+
+</details>
+
+#### LegacyVersion
+The older version of the Solana client the node is using.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `version` | [`LegacyVersion1`](#legacyversion1) | 7 or 11 | older version of the Solana used in 1.3.x and earlier releases |
+
+
+##### LegacyVersion1
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `major` | `u16`| 2 | major part of version |
+| `minor` | `u16`| 2 | minor part of version |
+| `patch` | `u16`| 2 | patch |
+| `commit` | `u32 \| None`| 5 or 1 | commit |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct LegacyVersion {
+    from: Pubkey,
+    wallclock: u64,
+    version: LegacyVersion1,
+}
+
+struct LegacyVersion1 {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: Option<u32>
+}
+```
+</details>
+
+#### Version
+The version of the Solana client the node is using.
+
+| Data | Type | Size | Description |
+|------|:----:|:-----:|-------------|
+| `from` | `[u8, 32]` | 32 | public key of origin |
+| `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
+| `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Solana |
+
+
+##### LegacyVersion2
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `major` | `u16`| 2 | major part of version |
+| `minor` | `u16`| 2 | minor part of version |
+| `patch` | `u16`| 2 | patch |
+| `commit` | `u32 \| None`| 5 or 1 | commit |
+| `feature_set` | `u32`| 4 | feature set |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct Version {
+    from: Pubkey,
+    wallclock: u64,
+    version: LegacyVersion2,
+}
+
+struct LegacyVersion2 {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: Option<u32>,
+    feature_set: u32
+}
+```
+</details>
+
+#### NodeInstance
+Contains node creation timestamp and randomly generated token.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `timestamp` | `u64`| 8 | timestamp when the instance was created |
+| `token` | `u64`| 8 | randomly generated value at node instantiation |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct NodeInstance {
+    from: Pubkey,
+    wallclock: u64,
+    timestamp: u64,
+    token: u64,
+}
+```
+</details>
+
+#### DuplicateShred
+A duplicated shred proof. Contains a 2-byte index followed by other data:
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `index` | `u16` | 2 | index |
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `slot` | `u64`| 8 | slot when shreds where created |
+| `_unused` | `u32`| 4 | _unused_ |
+| `_unused_shred_type` | [`ShredType`](#shredtype) | 1 | _unused_ |
+| `num_chunks` | `u8`| 1 | number of chunks available |
+| `chunk_index` | `u8`| 1 | index of the chunk |
+| `chunk` | `[u8]`| 8+ | shred data |
+
+##### ShredType
+This enum is serialized as 1-byte data.
+
+| Enum ID | Data | Description |
+|:-------:|------|-------------|
+| `0b10100101` | `Data` | data shred |
+| `0b01011010` | `Code` | coding shred |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+enum CrdsData {
+    //...
+    DuplicateShred(DuplicateShredIndex, DuplicateShred),
+    //...
+}
+
+type DuplicateShredIndex = u16;
+
+struct DuplicateShred {
+    from: Pubkey,
+    wallclock: u64,
+    slot: Slot,
+    _unused: u32,
+    _unused_shred_type: ShredType,
+    num_chunks: u8,
+    chunk_index: u8,
+    chunk: Vec<u8>,
+}
+
+#[serde(into = "u8", try_from = "u8")]
+enum ShredType {
+    Data = 0b1010_0101,
+    Code = 0b0101_1010,
+}
+```
+</details>
+
+#### SnapshotHashes
+Contains hashes of full and incremental snapshots.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `full` | `(u64, [u8, 32])`| 40 | hash and slot number of the full snapshot |
+| `incremental` | `[(u64, [u8, 32])]`| 8+ | list of hashes and slot numbers of incremental snapshots |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct SnapshotHashes {
+    from: Pubkey,
+    full: (Slot, Hash),
+    incremental: Vec<(Slot, Hash)>,
+    wallclock: u64,
+}
+```
+</details>
+
+#### ContactInfo
+Contact info of the node.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `pubkey` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `outset` | `u64`| 8 | timestamp when node instance was first created |
+| `shred_version` | `u16`| 2 | the shred version the node has been configured to use |
+| `version` | [`Version`](#version-1) | 13+ | Solana version |
+| `addrs` | [`[IpAddr]`](#ipaddr) | 8+ | list of unique IP addresses |
+| `sockets` | [`[SocketEntry]`](#socketentry) | 8+ | list of unique sockets  |
+| `extensions` | [`[Extension]`](#extension) | 8+ | future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused |
+| `cache` | [`[SocketAddr, 12]`](#socketaddr) | 120 or 264 | cache of nodes socket addresses |
+
+##### Version
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `major` | `u16`| 2 | major part of version |
+| `minor` | `u16`| 2 | minor part of version |
+| `patch` | `u16`| 2 | patch |
+| `commit` | `u32 \| None`| 5 or 1 | commit |
+| `feature_set` | `u32`| 4 | feature set |
+| `client` | `u16`| 2 | client |
+
+##### IpAddr
+| Enum ID | Data | Type | Size | Description |
+|:-------:|------|:----:|:----:|-------------|
+| 0 | `V4` | `[u8; 4]` | 4 | IP v4 addr |
+| 1 | `V6` | `[u8, 16]` | 16 | IP v6 addr |
+
+##### SocketEntry
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `key` | `u8`| 1 | protocol identifier (tvu, tpu, etc.) |
+| `index` | `u8`| 1 | IpAddr index in the addrs list |
+| `offset` | `u16`| 2 | port offset in respect to previous entry |
+
+##### Extension
+_Currently empty_
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct ContactInfo {
+    pubkey: Pubkey,
+    wallclock: u64,
+    outset: u64,
+    shred_version: u16,
+    version: Version,
+    addrs: Vec<IpAddr>,
+    sockets: Vec<SocketEntry>,
+    extensions: Vec<Extension>,
+    cache: [SocketAddr; 12],
+}
+
+enum Extension {}
+
+enum IpAddr {
+    V4(Ipv4Addr),
+    V6(Ipv4Addr)
+}
+
+struct Ipv4Addr {
+    octets: [u8; 4]
+}
+
+struct Ipv6Addr {
+    octets: [u8; 16]
+}
+
+struct SocketEntry {
+    key: u8,
+    index: u8,
+    offset: u16
+}
+
+struct Version {
+    major: u16,
+    minor: u16,
+    patch: u16,
+    commit: Option<u32>,
+    feature_set: u32,
+    client: u16
+}
+```
+</details>
+
+#### RestartLastVotedForkSlots
+Contains a list of last-voted fork slots.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `offsets` | [`SlotsOffsets`](#slotsoffsets) | 12+ | list of slots |
+| `last_voted_slot` | `u64`| 8 | last voted slot |
+| `last_voted_hash` | `[u8, 32]`| 32 | |
+| `shred_version` | `u16`| 2 | the shred version node has been configured to use |
+
+##### SlotsOffsets
+Offsets are stored either in binary form (`RawOffsets`) or encoded as numbers of consecutive 1's and 0's, e.g. 110001110 is [2, 3, 3, 1].
+| Enum ID | Data | Type | Size | Description |
+|:-------:|------|:----:|:----:|-------------|
+| 0 | `RunLengthEncoding` | `[u16]` | 8+ | encoded offsets |
+| 1 | `RawOffsets` | `b[u8]` | 9+ | raw offsets |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct RestartLastVotedForkSlots {
+    from: Pubkey,
+    wallclock: u64,
+    offsets: SlotsOffsets,
+    last_voted_slot: Slot,
+    last_voted_hash: Hash,
+    shred_version: u16,
+}
+
+enum SlotsOffsets {
+    RunLengthEncoding(RunLengthEncoding),
+    RawOffsets(RawOffsets),
+}
+
+struct RunLengthEncoding(Vec<u16>);
+struct RawOffsets(BitVec<u8>);
+```
+</details>
+
+
+#### RestartHeaviestFork
+Contains the heaviest fork.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `from` | `[u8, 32]`| 32 | public key of origin |
+| `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
+| `last_slot` | `u64`| 8 | last slot of the fork |
+| `last_hash` | `[u8, 32]`| 32 | hash of the last slot |
+| `observed_stake` | `u64`| 8 | |
+| `shred_version` | `u16`| 2 | the shred version node has been configured to use |
+
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+struct RestartHeaviestFork {
+    from: Pubkey,
+    wallclock: u64,
+    last_slot: Slot,
+    last_slot_hash: Hash,
+    observed_stake: u64,
+    shred_version: u16,
+}
+```
+</details>
 
 [bincode]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
 [blockstore]: https://docs.solanalabs.com/validator/blockstore
