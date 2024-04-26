@@ -40,7 +40,9 @@ flowchart TD
 5. Sends responses over sockets - messages are serialized to a binary form and sent to peers via UDP sockets.
 
 ### Receiving data from cluster
-Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When a node connects to the cluster and advertises itself it will start receiving data from other nodes. Received data is collected into a packet batch that is further processed. 
+Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When in a `spy` mode nodes shred version is set to 0. 
+
+When a node connects to the cluster and advertises itself it will start receiving data from other nodes. Received data is collected into a packet batch that is further processed. 
 
 ### Consuming packets
 
@@ -77,7 +79,7 @@ Only successfully verified packets are processed in the next step.
 
 ## Data processing
 
-Once messages are sanitized and verified, the node starts processing them. First, messages are filtered by shred version - if the message is coming from a node with a different shred version it is ignored unless it contains one of the data types: `ContactInfo`, `LegacyContactInfo` and `NodeInstance`.
+Once messages are sanitized and verified, the node starts processing them. First, messages are filtered by shred version - if the message is coming from a peer with a different shred version, or shred version != 0 (peer is in a `spy` mode), it is ignored unless it contains one of the data types: `ContactInfo`, `LegacyContactInfo` and `NodeInstance`.
 
 Values from filtered messages are stored in the [_Cluster Replicated Data Store_](#crds), `crds`. Based on the type of received message node will perform additional actions, e.g. collect data from its `crds` and produce a pull response, generate a pong message or update its push active set of nodes. These are described in detail in the next chapters.
 
