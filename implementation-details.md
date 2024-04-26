@@ -88,7 +88,6 @@ Each node stores the data it received or produced in the _Cluster Replicated Dat
 
 ```rust
 struct Crds {
-  /// Stores the map of labels and values
   table: IndexMap<CrdsValueLabel, VersionedCrdsValue>,
   //...
 }
@@ -128,8 +127,9 @@ struct CrdsShards {
 }
 ```
 
-_Example_:
-A node inserts a `CrdsValue` into `crds` table. The `crds` returns the index under which the value was inserted, `crds_index`. Then, the node calculates `CrdsValue`'s hash - its first 12 bits are equal to e.g. `000001000011`, which is 67 . Finally, the hash and the `crds_index` are stored in the `shards` vector at index 67.
+> _Example_:
+>
+> A node inserts a `CrdsValue` into `crds` table. The `crds` returns the index under which the value was inserted, `crds_index`. Then, the node calculates `CrdsValue`'s hash - its first 12 bits are equal to e.g. `000001000011`, which is 67 . Finally, the hash and the `crds_index` are stored in the `shards` vector at index 67.
 
 The `CrdsShards` structure is used for a fast search of `CrdsValue`s when building a bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request.
 
@@ -220,6 +220,7 @@ struct CrdsFilter {
 Instead of creating one big bloom filter with all `Crdsvalue`s from the `crds` table,  the node partitions its data into multiple bloom filters. The `mask_bits` value in `CrdsFilter` determines how many first bits of a `CrdsValue` hash will be used to partition the values over filters. 
 
 > _Example_
+>
 > The `mask_bits` value equals 3. There will be `2^3=8` `CrdsFilter`s created. Filter with `mask=000`  will contain all hashes that start with `000` bits. The one with `mask=001` will contain all hashes starting from `001`, and so on.
 
 
@@ -250,11 +251,13 @@ When a node receives a pull request it inserts the pull request value (`LegacyCo
 
 2. If `mask_bits < shard_bits` values are gathered from all `shards` where first `mask_bits` bits of the indices are equal to the `mask` and then they are filtered using the bloom filter.
 > _Example_
+>
 > If `mask_bits=4`, `shard_bits=12` and `mask=0001` we search for all shards which contain hashes starting with `0001`, e.g. `000100000000...`, `000100000001...`, and so on.
 
 3. If `mask_bits > shard_bits` an index whose all bits match the first `shard_bits` of the `mask` is selected, and then values from that index are filtered such that the first `mask_bits` bits of their hashes are equal to the `mask`. Finally, values are filtered using the bloom filter and collected. 
 
 > _Example_
+>
 > `mask_bits=15`, `shard_bits=12`, `mask=000001000000001` - first we search for a shard with an index equal to the first 12 bits of the mask, `000001000000`, which is 64, and then for hashes starting with `000001000000001...` from that shard.
 
 A Few additional checks for collected `CrdsValue`s are performed before pull responses are created: 
