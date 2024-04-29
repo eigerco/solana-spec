@@ -120,8 +120,8 @@ enum CrdsValueLabel {
 }
 ```
 
-Node when receiving a new `CrdsValue`:
-*  stores it in the `crds` table by creating a new `VersionedCrdsValue` or updating the existing one (in case updated data was received)
+The node's handling when it receives a new `CrdsValue`:
+* stores it in the `crds` table by creating a new `VersionedCrdsValue` or updating the existing one (in case updated data was received)
 * keeps the `crds` table index which is created during insertion/update - it points to the `CrdsValue` entry in the table
 * hashes the `CrdsValue`
 * stores the `crds` index and the hash in a separate structure called `CrdsShards`. 
@@ -221,7 +221,7 @@ When a peer sends us a message from a given origin, its score is updated in RCE,
 >
 >Let's say there is also a node G that sends `Ma` to C, but G sends the message after nodes A and B. In this case G score would remain unchanged. The same would be for any other node sending `Ma` to C. Scores are only increased for the first two nodes that sent a message from a given origin. 
 >
->After receiving `Ma` C would have three scores stored in RCE for the origin A: for both nodes A and B the score would be 1, for G it would be 0, and the `num_upserts` value would be 1.
+>After receiving the `Ma` message, C would have three scores stored in RCE for the origin A: for both nodes A and B the score would be 1, for G it would be 0, and the `num_upserts` value would be 1.
 
 When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned:
 
@@ -307,7 +307,7 @@ When a node receives a pull request it inserts the pull request value into its `
 >
 > `mask_bits = 15`, `shard_bits = 12`, `mask = 000001000000001` - first we search for a shard with an index equal to the first 12 bits of the mask, `000001000000`, which is 64, and then for hashes starting with `000001000000001...` from that shard.
 
-A Few additional checks for collected `CrdsValue`s are performed before pull responses are created: 
+A few additional checks for collected `CrdsValue`s are performed before pull responses are created: 
 * `CrdsValue`s wallclock is checked against the pull request origin wallclock - if a value is newer it is skipped
 * if a value is of one of the types: `LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots` - if it originates from a non-staked node it is skipped
 
@@ -333,3 +333,13 @@ The node receiving the prune message will update its active set of nodes and add
 ### Ping and pong messages
 
 Nodes constantly ping their peers to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
+
+
+## TODOs
+
+* _how often the nodes should send ping messages_
+* _how much time the node has to reply to a ping message_
+* _how much time the node has to reply to pull request_
+* _what happens if the node ignores the prune message and sends the push message anyway to everybody_
+* _how often the node needs to send push message (is that also every 7,5 sec?)_
+* _more details about each data type_
