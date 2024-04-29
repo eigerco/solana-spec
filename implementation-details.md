@@ -203,9 +203,45 @@ struct ReceivedCacheEntry {
 
 type Score = usize;
 ```
-Whenever a new message from a given origin comes from a peer, the peer's `score` and `num_upserts` in RCE are incremented. The next peer sending the same message will also have its `score` incremented. The `num_upserts` will not be updated though as this value only increases once every new message from a given origin comes. For every next peer sending the same message from this origin, the `score` will remain unchanged. When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned:
-* node stakes are summed up starting from the highest score node and going down the list to nodes with lower score
-* when the sum of stakes reaches a defined fraction of the node's own stake: `sum > min(node_stake, origin_stake) * 0.15`, all the remaining nodes, that is nodes whose stake was not summed up yet, are pruned.
+The RCE structure contains two fields: 
+* `nodes` - it is a hash map of node pubkeys and their score
+* `num_upserts` - an integer value that is increased every time a new message from a given origin arrives
+
+When a peer sends us a message from a given origin, its score is updated in RCE, but only if it was the first or second peer that sent us this message.
+
+> _Example_
+>
+> Take a look at the example from the beginning of this chapter. Node C would increase the score of A and B when it received the message `Ma`. The `num_upserts` would be also increased, but only once, just when the `Ma` came from node A as this value doesn't changes when receiving duplicates. 
+>
+>Let's say there is also a node G that sends `Ma` to C, but G is the slowest one so its message comes as the last one. In this case G score would remain unchanged. The same would be for any other node sending `Ma` to C. Scores are only increased for the first two nodes that sent a given message. 
+>
+>So after receiving `Ma` C would have three scores stored in RCE for `Ma`: for both nodes A and B the score would be 1, for G it would be 0, and `num_upserts` would be equal 1.
+
+When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned:
+
+
+```rust
+let mut sum = 0;
+let mut pos = 0;
+let sorted_nodes = sort_nodes_based_on_score(nodes);
+for (i, node) in sorted_nodes.iter().enumerate() {
+  sum = sum + node.stake;
+  if sum > min(stake, origin_stake) * 0.15 {
+    pos = i;
+    break;
+  }
+}
+prune_nodes(sorted_nodes[pos + 1..]);
+```
+where:
+* stake - our node's stake
+* origin_stake - stake of the origin node.
+
+Let's explain the algorithm above:
+* nodes are sorted descending based on their score
+* their stakes are summed up starting from the highest score node and going down the list to nodes with lower score
+* when the sum of stakes reaches a defined fraction of the node's own stake: `sum > min(node_stake, origin_stake) * 0.15`, we store the current loop iteration index (`pos = i`) and finish the loop
+* all left nodes whose stake was not summed up yet, starting from `pos + 1`, are pruned.
 
 ### Pull requests
 
