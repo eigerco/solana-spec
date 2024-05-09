@@ -1,6 +1,6 @@
 # Gossip protocol implementation details
 
-Solana nodes use gossip protocol to exchange data. They send messages to the cluster whenever they have new data to share and ask the cluster for new data they are missing. Gossip runs on a well-known UDP/IP port or a port in a well-known range. When a node joins the cluster it advertises itself to others where to find its gossip endpoint.
+Solana nodes use gossip protocol to exchange data. They send messages to the cluster whenever they have new data to share and ask the cluster for new data they are missing. Gossip runs on a well-known UDP/IP port or a port in a well-known range. When a node [joins the cluster](#connecting-to-the-cluster) it advertises itself to others where to find its gossip endpoint.
 
 Each Solana node participates in gossip in one of two modes:
 * `gossip` mode - node binds to specified UDP socket and fully participates in the gossip
@@ -19,6 +19,16 @@ Each Solana node participates in gossip in one of two modes:
 > - _Epoch_ - it is a length of certain amount of blocks (_slots_) in which the validator schedule is defined
 > - _Slot_ - the period of time for which each leader ingests transactions and produces a block
 
+## Connecting to the cluster
+
+When connecting a node to the cluster you need to specify an entry point - that is the gossip address of the peer you want to connect to. The node starts then advertising itself to the cluster by sending messages to the peer:
+* it sends two push messages containing Version and NodeInstance 
+* it sends a pull request that contains nodes LegacyContactInfo
+
+These messages are [propagated further](#propagating-push-messages-over-a-cluster) to other nodes in the cluster. Soon after that, the node should start receiving pull responses, push messages and pings from other nodes. 
+
+When the connection with the cluster is established node can fully participate in the gossip - it can update the cluster with its data (push messages) and receive data from its peers (pull requests).
+
 ## Data management
 
 When a Solana node receives data from a peer it processes it in several steps:
@@ -36,11 +46,11 @@ flowchart TD
 1. [Receives](#receiving-data) data in a binary form over UDP sockets - data is gathered in a batch of packets and processed further
 2. [Consumes](#consuming-packets) packets - they are deserialized into messages, sanitized and verified before processing
 3. [Processes](#data-processing) messages - they are filtered, the incoming values are stored in the node's internal storage, and in some cases, responses are generated
-4. Generates pings, push and pull messages in the gossip loop which are sent to peers. 
+4. Generates pings, push and pull messages in the gossip loop that are sent to peers. 
 5. Sends responses over sockets - messages are serialized to a binary form and sent to peers via UDP sockets.
 
 ### Receiving data from cluster
-Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When in a `spy` mode nodes shred version is set to 0. 
+Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When in a `spy` mode nodes shred version is set to 0 - that means the node will accept messages from nodes with any shred version. 
 
 When a node connects to the cluster and advertises itself it will start receiving data from other nodes. Received data is collected into a packet batch that is further processed. 
 
@@ -62,18 +72,18 @@ Packets are deserialized into one of 6 message types:
 
 Sanitization excludes signature-verification checks as these are performed in the next step. Sanitize checks include but are not limited to:
 
-* all index values are in the range
-* all values are within their static min/max bounds
+* all values are within their static min/max bounds defined by their data types - e.g. unsigned 16-bit integer values can be within 0 and 2^16 (65536)
+* all index values are in the range - e.g. for every `CompiledInstruction` in the `Message` that is part of the `Vote` data type, the `program_id_index`, which indicates the account ID that executes the instructions, must be within 1 (0 account is the payer) and the number of account keys
 
 #### Data verification
 
 Verification is handled differently according to the type of message:
 
-* pull request - the public key of the incoming value is verified,
-* pull response, push message - each value from the incoming array is verified as above
-* prune message - the public key of the incoming value is verified,
-* ping - token is verified
-* pong - hash of received ping token is verified
+* pull request - the received `CrdsValue` is verified using its signature and its public key,
+* pull response, push message - each `CrdsValue` from the incoming array is verified using the signature and public key of the respective `CrdsValue`
+* prune message - the received `PruneData` is verified using its signature and its public key,
+* ping - the received token is verified using the ping signature and its public key
+* pong - hash of the received ping token is verified using the pong signature and its public key
 
 Only successfully verified packets are processed in the next step.
 
@@ -86,7 +96,7 @@ Values from filtered messages are stored in the [_Cluster Replicated Data Store_
 
 ### Crds
 
-Each node stores the data it received or produced in the _Cluster Replicated Data Store_, `crds`. The `crds` contains a table which is an index map of `CrdsValueLabel` and `VersionedCrdsValue`. The `CrdsValueLabel` is an enum type whose elements store the origin public key and correspond to the gossip protocol types (`Vote`, `NodeInstance`, etc.). This means there will be only one of each data type stored in `crds` per public key. The `VersionedCrdsValue` stores the `CrdsValue` with additional metadata, like the timestamp when the value was updated or its hash.
+Each node stores the data it receives or produces in the _Cluster Replicated Data Store_, `crds`. The `crds` contains a table which is an index map of `CrdsValueLabel` and `VersionedCrdsValue`. The `CrdsValueLabel` is an enum type whose elements store the origin public key and correspond to the gossip protocol types (`Vote`, `NodeInstance`, etc.). This means there will be only one of each data type stored in `crds` per public key. The `VersionedCrdsValue` stores the `CrdsValue` with additional metadata, like the timestamp when the value was updated or its hash.
 
 ```rust
 struct Crds {
@@ -120,13 +130,13 @@ enum CrdsValueLabel {
 }
 ```
 
-The node's handling when it receives a new `CrdsValue`:
+When a node receives a new `CrdsValue`, the node:
 * stores it in the `crds` table by creating a new `VersionedCrdsValue` or updating the existing one (in case updated data was received)
 * keeps the `crds` table index which is created during insertion/update - it points to the `CrdsValue` entry in the table
 * hashes the `CrdsValue`
 * stores the `crds` index and the hash in a separate structure called `CrdsShards`. 
 
-The `CrdsShards` structure contains a vector `shards` and `shard_bits` which is a fixed value set to 12 currently. The `shard_bits` tells how many first bits of the `CrdsValue` hash should be used to partition the hashes in the `shards` vector. The `shards` vector can have up to 4096 elements. Each `shards` element is an index map of a `CrdsValue` index in the `crds` table and its hash. 
+The `CrdsShards` structure contains a vector `shards` and `shard_bits` which is a fixed value set to 12 currently. The `shard_bits` tells how many first bits of the `CrdsValue` hash should be used to partition the hashes in the `shards` vector. The `shards` vector can have up to 2^12 (4096) elements. Each element in the `shards` vector is an index map of a `CrdsValue` index in the `crds` table and the hash of the `CrdsValue`. 
 
 ```rust
 struct CrdsShards {
@@ -139,15 +149,15 @@ struct CrdsShards {
 >
 > A node inserts a `CrdsValue` into `crds` table. The `crds` returns the index under which the value was inserted, `crds_index`. Then the node calculates `CrdsValue`'s hash which first 12 bits are equal to e.g. `000001000011`, which is 67 . Finally, the hash and the `crds_index` are stored in the `shards` vector at index 67.
 
-The `CrdsShards` structure is used for a fast search of `CrdsValue`s when building a bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request.
+The `CrdsShards` structure is used for a fast search of `CrdsValue`s when building a bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request. More on that in the [pull requests](#pull-requests) chapter.
 
 ### Push messages
 
 Push messages are the heart of the gossip protocol. Each node that wants to share information with others in the cluster sends a push message, which is then propagated further by its peers. 
 
-Push messages are created periodically. Node tracks a `push_cursor` which represents the cursor value of the last pushed `CrdsValue` into `crds`. When a node wants to send a push message it gets all newly pushed data from `crds` since the last position of the `push_cursor`, collects peers from its active set of nodes, and creates and sends push messages to them. 
+Push messages are created periodically. Node tracks a `push_cursor` which represents the cursor value of the last pushed `CrdsValue` into `crds`. When a node wants to send a push message it gets all newly pushed data from `crds` since the last position of the `push_cursor`, collects peers from its [active set of nodes](#push-active-set-of-nodes), and creates and sends push messages to them. 
 
-Some peers might have pruned the origin node (more on that below), in which case they are excluded from the list of message recipients. Unless the sent data type is `NodeInstance`, which is always sent to every peer even if the origin of the message is pruned.
+Some peers might have pruned the origin node (more on that below), in which case they are excluded from the list of message recipients. Unless the sent data type is `NodeInstance`, which is always sent to peers even if the origin of the message is pruned.
 
 #### Processing push messages
 
@@ -172,35 +182,39 @@ flowchart LR
 ```
 There are 5 nodes in the cluster with different stakes: node A with 1000 stake, B with 1000 stake, C with 100 stake and so on. Node A sends a message, `Ma`, which is propagated through the network by its peers.
 
-Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will come faster than from B (fewer hops), so B will be informed to not send any messages to C originating from A anymore (C will ignore them anyway). In other words, C will prune node A and to do that it will send a prune message to node B.
+Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will likely come faster than from B (fewer hops). Since C has now received the same message (`Ma`) from two different nodes, C needs to tell B to stop sending it messages originating from A. In other words, C is PRUNING B for all messages created by A. C prunes B since B's relay of `Ma` is coming in after C has already received `Ma` from A.
 
 ##### Push active set of nodes
 
-Each node holds a _push active set of nodes_. It is a 25-element array, where each element, a `PushActiveSetEntry`, contains an index map of node public keys and bloom filters [containing pruned nodes](#pruning-nodes).
+Each node holds a _push active set of nodes_. It is a 25-element array because it represents the log2 distribution of the network's stake (largest stake holder is 14 million SOL, log(14 million) = 23.7). Each element, a `PushActiveSetEntry`, contains an index map of node public keys and bloom filters containing pruned nodes.
 
 ```rust
 struct PushActiveSet([PushActiveSetEntry; 25])
 struct PushActiveSetEntry(IndexMap<Pubkey, ConcurrentBloom<Pubkey>>);
 ```
 
-Every 7500ms the nodes are rotating their active set of nodes:
-1. For every i-th node, a bucket is calculated from the node's stake: `bucket[i] = min(log2(node_stake[i]),24)`.
+Every 7500ms, nodes rotate their active set of nodes:
+1. For every i-th node, a bucket is calculated from the node's stake: `bucket[i] = min(log2(node_stake[i]), 24)`.
 2. For every active set entry k (k=[0, 24]) weights of nodes are calculated: `weight[i] = (min(bucket[i], k) + 1)^2`.
 3. Nodes in every k-th active set entry are weight-shuffled. The first 12 of them are inserted into the active set entry index map with empty bloom filters.
 
-Before sending the push message further a node first calculates the stake: `min(node_stake, origin_stake)`, where `node_stake` is the stake of the node that received the message, `origin_stake` is the stake of the message origin node. The calculated stake corresponds to a bucket in the push active set of nodes. For each peer found at a given push active set entry from the selected bucket, the node checks whether the origin of the push message was pruned by this peer by checking its bloom filter. If yes the peer is filtered out - it will not receive the message. Otherwise, a peer is collected. Finally, a list of push messages is created for no more than a `fanout` (9) amount of collected peer. In the example shown above node A was pruned by C so B will not send it a message.
+To send the push message further the node does the following:
+1. Calculates the bucket: `bucket = log2(min(node_stake, origin_stake))`, where `node_stake` is the stake of the node that received the message, and `origin_stake` is the stake of the message origin node.
+2. Node goes through the list of peers from a push active set entry at the calculated bucket:
+    * for each peer node checks whether the origin of the push message was pruned by this peer by checking its bloom filter:
+      * if yes then the peer is filtered out and will not receive the message
+      * if no - peer is collected
+3. Finally, a list of push messages is created for no more than a `fanout` (9) amount of collected peers.
 
-This algorithm guarantees that:
-* nodes with higher stake will more likely send the message to their higher-staked peers
-* nodes with lower stake will send the message to randomly selected peers from the whole pool
-* messages originating from higher-staked nodes will more likely be sent to higher-staked peers
-* messages originating from lower-staked nodes will be sent to randomly selected peers from the whole pool.
+The outcome of this algorithm is:
+* high-staked nodes will more likely send the message to their high-staked peers if the origin is also high-staked, or will send it to randomly selected peers if the origin is low-staked
+* low-staked nodes will send the message to randomly selected peers from the whole pool
 
 ##### Receive cache
 
 Nodes store information about received messages in the `ReceivedCache` - it's a map of message origins and `ReceivedCacheEntry` (RCE) which is defined as:
 ```rust
-struct ReceivedCache(LruCache<Pubkey, ReceivedCacheEntry>
+struct ReceivedCache(LruCache<Pubkey, ReceivedCacheEntry)>
 
 struct ReceivedCacheEntry {
   nodes: HashMap<Pubkey, Score>,
@@ -213,7 +227,7 @@ The RCE structure contains two fields:
 * `nodes` - it is a hash map of node public keys and their score
 * `num_upserts` - an integer value that is increased every time a new message from a given origin arrives
 
-When a peer sends us a message from a given origin, its score is updated in RCE, but only if it was the first or second peer that sent us a message from this origin.
+When a peer sends us a message from a given origin, its score is updated in RCE, but only if the peer was the first or second to send us a message from this origin.
 
 > _Example_
 >
@@ -232,7 +246,7 @@ let mut pos = 0;
 let sorted_nodes = sort_nodes_based_on_score(nodes);
 for (i, node) in sorted_nodes.iter().enumerate() {
   sum = sum + node.stake;
-  if sum > min(stake, origin_stake) * 0.15 {
+  if i > 1 && sum > min(stake, origin_stake) * 0.15 {
     pos = i;
     break;
   }
@@ -244,14 +258,24 @@ where:
 * `origin_stake` - stake of the origin node.
 
 Let's explain the algorithm above:
-* nodes are sorted descending based on their score
+* nodes are sorted descending based on their score, if the score is equal nodes are sorted descending by stake
 * their stakes are summed up starting from the highest score node and going down the list to nodes with lower score
+* we ensure at least 2 nodes are always kept: `if > 1 && ...`
 * when the sum of stakes reaches a defined fraction of the node's own stake: `sum > min(node_stake, origin_stake) * 0.15`, we store the current loop iteration index (`pos = i`) and finish the loop
 * all left nodes whose stake was not summed up yet, starting from `pos + 1`, are pruned.
 
+### Pruning nodes
+
+When a node wants to prune some of its peers it sends a prune message. We already know that pruning is based on the receive cache score and peer stake. In the example posted above node G has a low score in the receive cache of node C. Therefore node C sent a prune message to G with a list of pruned nodes containing A, which means - hey G don't send me messages originating from A anymore.
+
+
+The node receiving the prune message will update its active set of nodes and add pruned nodes to the bloom filter of the message origin entry. In the above example, node G receiving the prune message will add A into the bloom filters of node C in the active set of nodes. Then, whenever G would like to send a push message to C will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, G will not send it to C.
+
 ### Pull requests
 
-Nodes are constantly sending pull requests to obtain data they don't contain. To avoid receiving data the node already contains, it creates a list of `CrdsFilter`s which are inserted into pull requests. Each `CrdsFilter` contains a bloom filter with hashes of data the node already possesses - `CrdsValue`s from `crds`, purged values, and failed inserts. Bloom filter is a very fast filter used for checking whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually isn't.
+Push message propagation doesn't guarantee that all nodes in the network receive every message. As a result, nodes need a way to ask their peers for any information they do not have. A node doesn't know what it doesn't have. So, the node sends the pull request with data it already has to its peers. The peers will then look over their `crds` table and respond with any data the requesting node does not have.
+
+To avoid receiving data the node already contains, it creates a list of `CrdsFilter`s which are inserted into pull requests. These filters are used by peers to quickly find out what data the requesting node is missing. Each `CrdsFilter` contains a bloom filter with hashes of data the node already possesses - `CrdsValue`s from `crds`, purged values, and failed inserts. Bloom filter is a very fast filter used for checking whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually isn't.
 
 ```rust
 struct CrdsFilter {
@@ -273,9 +297,14 @@ The `mask_bits` param is calculated as:
 ```
 mask_bits = max(log2(num_items / max_items), 0.0)
 ```
-where `num_items` is the number of current items we want to insert into the filter and `max_items` is the maximum number of items that can be inserted. 
+where `num_items` is the number of current items we want to insert into the filter: `CrdsValue`s, purged values and failed inserts. `max_items` is the maximum number of items that can be inserted. 
 
-The `CrdsFilter`s are partitioned in pull requests between peers selected randomly using their weights calculated as follows: 
+Node gathers a list of known peers from its `crds` and filters out:
+* not active ones (no message received from that peer in the last 60 seconds)
+* peers with different shred version or shred version != 0
+* peers with invalid gossip address
+
+The `CrdsFilter`s are then partitioned in pull requests between the gathered peers selected randomly using their weights calculated as follows: 
     
   ```
     stake = min(node_stake, peer_stake[i])
@@ -284,32 +313,53 @@ The `CrdsFilter`s are partitioned in pull requests between peers selected random
 
   where: 
   * `node_stake` - stake of "our" node, 
-  * `peer_stake[i]` - stake of i-th node from the list.
+  * `peer_stake[i]` - stake of i-th peer from the list.
+
   
-The higher the node's weight, the more pull requests will be associated with it.
+The higher the node's weight, the more pull requests will be sent to it.
 
-Each pull request contains one of the `CrdsFilter`s from the list and a `CrdsValue`, which is usually a `LegacyContactInfo`. It contains details of the node that sent the pull request - a list of its IP addresses, public key and wallclock. 
+Each pull request contains one of the `CrdsFilter`s from the list and a `CrdsValue`, which is a `LegacyContactInfo`. It contains details of the node that sent the pull request - a list of its IP addresses, public key and wallclock. 
 
-When a node receives a pull request it inserts the pull request value into its `crds`, or updates the existing one in case of duplicate. Then, it checks whether the pull request comes from a valid address as a pull response needs to be sent back. Next, the node checks the pull request wallclock value - if it's not within 15 seconds of the current node's wallclock the request is ignored. Otherwise, a node gathers data from the `crds` table and filters it with the provided `CrdsFilter`. Node uses the `mask_bits` value and the `CrdsShards` structure to find the proper hashes of `CrdsValue`s from `crds`:
-1. If `mask_bits = shard_bits = 12` the `CrdsFilter` `mask` value can be used directly as an index in the `shards` vector. The node will gather all `CrdsValue`s from `crds` whose hashes belong to that index in `shards` and filter them with the provided bloom filter. Values not existing in the filter will be collected for further processing.
-> _Example_
->
-> If `mask = 000000010000 = 16` we search for hashes from `shards` vector under index 16
+When a node receives a pull request it inserts the pull request value, `LegacyContactInfo`, into its `crds`, or updates the existing one in case of duplicate. Then, it checks whether the pull request comes from a valid address as a pull response needs to be sent back. Next, the node checks the pull request wallclock value - if it's not within 15 seconds of the current node's wallclock the request is ignored. Otherwise, a node gathers data from the `crds` table and filters it with the provided `CrdsFilter`. 
 
-2. If `mask_bits < shard_bits` values are gathered from all `shards` where first `mask_bits` bits of the indices are equal to the `mask` and then they are filtered using the bloom filter.
-> _Example_
->
-> If `mask_bits = 4`, `shard_bits = 12` and `mask = 0001` we search for all shards which contain hashes starting with `0001`, e.g. `000100000000...`, `000100000001...`, and so on.
+As was already [explained](#crds), the `CrdsShards` structure holds a `shards` vector whose elements are an index map of `CrdsValue`s indexes in the `crds` table and their hashes. The `shards` vector allows the node to quickly find and filter out `CrdsValue`s that the pull request sender already has in its `crds`. Let's assume `shard_bits = 3` (actually it is 12), `mask_bits = 3` and `mask = 001 = 1` for simplicity. The `shards` vector would look like this:
 
-3. If `mask_bits > shard_bits` an index whose all bits match the first `shard_bits` of the `mask` is selected, and then values from that index are filtered such that the first `mask_bits` bits of their hashes are equal to the `mask`. Finally, values are filtered using the bloom filter and collected. 
 
-> _Example_
->
-> `mask_bits = 15`, `shard_bits = 12`, `mask = 000001000000001` - first we search for a shard with an index equal to the first 12 bits of the mask, `000001000000`, which is 64, and then for hashes starting with `000001000000001...` from that shard.
+```mermaid
+block-beta
+  block
+    columns 2
+    block
+        columns 1
+        b["000...0"]
+        c["000...1"]
+        d["..."]
+    end
+    l1<["index = 000"]>(left)
+    block
+        columns 1
+        e["001...0"]
+        f["001...1"]
+        g["..."]
+    end
+    l2<["index = 001"]>(left)
+  end
+```
+Numbers in the left column represent the hashes (in binary form) of the `CrdsValue`s stored in the `shards` vector. Elements stored at index `000` contain all hashes starting from `000...` (and corresponding indexes of the `CrdsValue`s in the `crds` table), index `001` contains all hashes starting from `001...` and so on. 
+
+The `mask` value from the pull request `CrdsFilter` is equal to `001` - that means we need to get all elements from the `shards` vector located at index `001`. Since every element contains both hash and the index of the `CrdsValue` in the `crds` table we can quickly find the actual `CrdsValue`s in `crds`. 
+
+When all `CrdsValue`s are collected they are filtered using the provided bloom filter. Elements that don't exist in the filter will be sent back to the pull request sender.
+
+However, there might be the case when `mask_bits < shard_bits` or `mask_bits > shard_bits`:
+
+* `mask_bits < shard_bits` - if e.g. `mask_bits = 2`, `shard_bits = 3` and `mask = 01` we look up all `shards` indexes starting with `01`, e.g. `010`, `011`, `012` and so on, and collect and filter all their elements 
+
+* `mask_bits > shard_bits` - if `mask_bits = 5`, `shard_bits = 3`, `mask = 00101` - first we search for a `shards` index equal to the first 3 bits of the mask, `001`, which is 1, and then for hashes starting with `00101...` from that index.
 
 A few additional checks for collected `CrdsValue`s are performed before pull responses are created: 
 * `CrdsValue`s wallclock is checked against the pull request origin wallclock - if a value is newer it is skipped
-* if a value is of one of the types: `LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots` - if it originates from a non-staked node it is skipped
+* if a value is of one of the types: `LowestSlot`, `LegacyVersion`, `DuplicateShred`, `RestartHeaviestFork`, `RestartLastVotedForkSlots` - and it originates from a non-staked node it is skipped
 
 Finally, all remaining `CrdsValue`s values are sent back to the origin of the pull request message in a [pull response](#pull-responses).
 
@@ -323,16 +373,9 @@ When a node receives a pull response it processes its list of `CrdsValue`s:
 * hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as failed inserts to prevent peers from sending them back (they are used when constructing bloom filter for next pull requests).
 * values pruned from `crds` table (i.e. overwritten values) are stored as purged values and also used for constructing bloom filter for the next pull requests
 
-
-### Pruning nodes
-
-When a node receives the same message from the same origin multiple times it sends the prune message to the node from which it received the duplicate. In the example shown in one of the previous chapters node C received a message originating from node A, `Ma`, from both nodes A and B. To avoid receiving such duplicates in the future C sent a prune message to node B with a list of pruned nodes containing A, which says - hey B don't send me messages originating from A anymore. 
-
-The node receiving the prune message will update its active set of nodes and add pruned nodes to the bloom filter of the message origin entry. In the example above node B receiving the prune message will add A into the bloom filters of node C in the active set of nodes. Then, whenever B would like to send a push message to C will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, B will not send it to C.
-
 ### Ping and pong messages
 
-Nodes constantly ping their peers to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
+Nodes ping their peers from time to time to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
 
 
 ## TODOs
