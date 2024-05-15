@@ -22,13 +22,13 @@ Each Solana node participates in gossip in one of two modes:
 
 ## Connecting to the cluster
 
-When connecting a node to the cluster you need to specify an entry point - that is the gossip address of the peer you want to connect to. The node starts then advertising itself to the cluster by sending messages to the peer:
-* it sends two push messages containing its own `Version` and `NodeInstance` 
-* it sends a pull request that contains the node's own `LegacyContactInfo`
+When connecting a node to the cluster, the node operator must specify an entrypoint. The entrypoint is the gossip address of the peer the node is going to initially connect to. The node starts up and then advertises itself to the cluster by sending messages to the peer identified by the entrypoint:
+* it sends two [push messages](#push-messages) containing its own [`Version`](gossip-protocol-spec.md#version) and [`NodeInstance`](gossip-protocol-spec.md#nodeinstance) 
+* it sends a [pull request](#pull-requests) that contains the node's own [`LegacyContactInfo`](gossip-protocol-spec.md#legacycontactinfo)
 
-The push messages are [propagated further](#propagating-push-messages-over-a-cluster) to other nodes in the cluster. Soon after that, the node should start receiving pull responses, push messages and pings from other nodes. 
+The push messages are [propagated further](#propagating-push-messages-over-a-cluster) to other nodes in the cluster. Soon after that, the node should start receiving [pull responses](#pull-responses), push messages, and [pings](#ping-and-pong-messages) from other nodes. 
 
-When the connection with the cluster is established the node can fully participate in the gossip - it can update the cluster with its data (push messages) and receive data from its peers by sending pull requests and receiving pull responses and push messages from them.
+When the connection with the cluster is established, the node can fully participate in the gossip - it can update the cluster with its data (push messages) and receive data from its peers through received push messages and by sending pull requests and receiving the corresponding pull responses.
 
 ## Data management
 
@@ -37,17 +37,17 @@ When a Solana node receives data from a peer it processes it in several steps:
 ```mermaid
 flowchart TD
   A(1. Receive data) --> B(2. Consume packets)
-  B --> C(3. Process packets)
+  B --> C(3. Process messages)
   C --> D(5. Send messages & responses)
 
   E(4. Gossip loop running in background) --> D
   E --> E
 ```
 
-1. [Receives](#receiving-data) data in a binary form over UDP sockets - data is gathered in a batch of packets and processed further
-2. [Consumes](#consuming-packets) packets - they are deserialized into messages, sanitized and verified before processing
-3. [Processes](#data-processing) messages - they are filtered, the incoming values are stored in the node's internal storage, and in some cases, responses are generated
-4. Generates pings, push and pull messages in the gossip loop that are sent to peers. 
+1. [Receives](#receiving-data-from-cluster) data in a binary form over UDP sockets - data is gathered in a batch of packets and processed further
+2. [Consumes](#consuming-packets) packets - the packets are deserialized into messages, sanitized and verified before processing
+3. [Processes](#data-processing) messages - the messages are filtered, the message values are stored in the node's internal storage, and in some cases, responses are generated
+4. Generates pings, push messages and pull requests in the [gossip loop](#gossip-loop) that are sent to peers. 
 5. Sends responses over sockets - messages are serialized to a binary form and sent to peers via UDP sockets.
 
 ### Receiving data from cluster
@@ -73,18 +73,18 @@ Packets are deserialized into one of 6 message types:
 
 Sanitization excludes signature-verification checks as these are performed in the next step. Sanitize checks include but are not limited to:
 
-* all values are within their semantical min/max bounds defined by their data types - e.g. unsigned 16-bit integer values must be in the range from 0 to 2^16 (65536)
-* all index values are in the range - e.g. for every `CompiledInstruction` in the `Message` that is part of the `Vote` data type, the `program_id_index`, which indicates the account ID that executes the instructions, must be within 1 (0 account is the payer) and the length of `account_keys` array passed in the `Message`
+* all values are within their static min/max bounds, e.g. wallclock value is less than `MAX_WALLCLOCK = 1_000_000_000_000_000`
+* all index values are in the range - e.g. index value of `EpochSlots` data type is less than `MAX_EPOCH_SLOTS = 255`
 
 #### Data verification
 
 Verification is handled differently according to the type of message:
 
-* pull request - the received `CrdsValue` is verified using its signature and its public key,
-* pull response, push message - each `CrdsValue` from the incoming array is verified using the signature and public key of the respective `CrdsValue`
-* prune message - the received `PruneData` is verified using its signature and its public key,
-* ping - the received token is verified using the signature and its public key
-* pong - hash of the received ping token is verified using the signature and its public key
+* pull request - the received `CrdsValue` is verified using the message's signature and sender's public key,
+* pull response, push message - each `CrdsValue` from the incoming array is verified using the message's signature and sender's public key of the respective `CrdsValue`
+* prune message - the received `PruneData` is verified using the message's signature and sender's public key,
+* ping - the received token is verified using the message's signature and sender's public key
+* pong - hash of the received ping token is verified using the message's signature and sender's public key
 
 Only successfully verified packets are processed in the next step.
 
@@ -160,7 +160,7 @@ Push messages are created periodically so the nodes can share the latest new dat
 
 Before sending the push message, the node needs to select peers from the [active set of nodes](#push-active-set-of-nodes) that will receive the message.
 
-Some peers might have [pruned](#pruning-nodes) the origin node, in which case they are excluded from the list of message recipients.
+Some peers might have [pruned](#pruning-nodes) us from sending them messages originating from a specific node. In such cases, these peers are excluded from the list of message recipients.
 
 #### Processing push messages
 
@@ -189,7 +189,7 @@ Some nodes may receive the same message multiple times, e.g. node C will receive
 
 ##### Push active set of nodes
 
-Each node holds a _push active set of nodes_. It is a 25-element array because it represents the log2 distribution of the network's stake (largest stake holder is 14 million SOL, log(14 million) = 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and bloom filters holding origin public keys. Node uses this index map to check if the origin of the message exists in the peer's corresponding bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
+Each node holds a _push active set of nodes_. It is a 25-element array because it represents the log2 distribution of the network's stake (largest stake holder is ~14 million SOL, log(14 million) = 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and bloom filters holding origin public keys. The node uses this index map to check if the origin of the message exists in the peer's corresponding bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
 
 ```rust
 struct PushActiveSet([PushActiveSetEntry; 25])
@@ -277,13 +277,15 @@ Let's explain the algorithm above:
 When a node wants to prune some of its peers it sends a prune message. We already know that pruning is based on the receive cache score and peer stake. In the example posted above node G has a low score in the receive cache of node C for messages originating from node A. Therefore node C sends a prune message to G with a list of origins to prune (this list includes origin A), which means - hey G don't send me messages originating from A anymore.
 
 
-The node receiving the prune message will update its active set of nodes and add pruned origins to the bloom filter corresponding to the public key that sent the prune message. In the above example, node G receiving the prune message will add A into the bloom filters of node C in the active set of nodes. Then, whenever G would like to send a push message to C, G will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, G will not send it to C.
+The node receiving the prune message will update its active set of nodes and add pruned origins to the bloom filter corresponding to the public key that sent the prune message. In the above example, node G receiving the prune message will add A into the bloom filters of peer C in the active set of nodes. Then, whenever G would like to send a push message to C, G will first check which message origins are pruned by C by checking the bloom filter. If the push message comes from A, G will not send it to C.
 
 ### Pull requests
 
-Push message propagation doesn't guarantee that all nodes in the network receive every message. As a result, nodes need a way to ask their peers for any information they do not have. A node doesn't know what it doesn't have. So, the node sends the pull request with data it already has to its peers. The peers will then look over their `crds` table and respond with any data the requesting node is missing.
+Push message propagation doesn't guarantee that all nodes in the network receive every message. As a result, nodes need a way to ask their peers for any information they do not have. A node doesn't know what it doesn't have. So, the node sends a pull request with data it already has to its peers. The peers will then look over their `crds` table and respond with any data the requesting node is missing.
 
-When creating a pull request, a node needs a way to ensure it does not receive back data it already contains. To do this, the node creates a list of `CrdsFilter`s which are inserted into pull requests. These filters are used by peers to quickly find out what data the requesting node has in its `crds` and what data it is missing. Each `CrdsFilter` contains a bloom filter with hashes of data the node already possesses - `CrdsValue`s from `crds`, purged values, and failed inserts. Bloom filter is a very fast filter used for checking whether it contains particular data. It has however some range of false positives - it can say a given data exists in the filter when it actually doesn't.
+When creating a pull request, a node needs a way to ensure it does not receive back data it already contains. To do this, the node creates a list of `CrdsFilter`s which are inserted into pull requests. These filters are used by peers to quickly find out what data the requesting node has in its `crds` and what data it is missing. Each `CrdsFilter` contains a bloom filter with hashes of data the node already possesses - `CrdsValue`s from `crds`, purged values, and failed inserts. Purged values are `CrdsValue`s that were removed from `crds` (e.g. old values), and failed inserts are `CrdsValue`s that were not inserted into `crds`, because for example, they were too old.
+
+A bloom filter is a fast, probabilistic data structure used for checking whether it contains particular data. It has however some range of false positives - it might say a given data exists in the filter when actually there is no such data there.
 
 ```rust
 struct CrdsFilter {
@@ -293,7 +295,7 @@ struct CrdsFilter {
 }
 ```
 
-Instead of creating one big bloom filter with all `CrdsValue`s from the `crds` table,  the node partitions its data into multiple bloom filters. The `mask_bits` value in `CrdsFilter` determines how many first bits of a `CrdsValue` hash will be used to partition the values over filters. 
+Instead of creating one big bloom filter with all `CrdsValue`s from the `crds` table, the node partitions its data into multiple bloom filters. The `mask_bits` value in `CrdsFilter` determines how many first bits of a `CrdsValue` hash will be used to partition the values over filters. 
 
 > _Example_
 >
@@ -307,12 +309,12 @@ mask_bits = max(log2(num_items / max_items), 0.0)
 ```
 where `num_items` is the number of current items we want to insert into the filter: `CrdsValue`s, purged values and failed inserts. `max_items` is the maximum number of items that can be inserted. 
 
-Node gathers a list of known peers from its `crds` and filters out:
+The node gathers a list of known peers from its `crds` and filters out:
 * inactive ones (no message received from that peer in the last 60 seconds)
 * peers with a different shred version or shred version != 0
 * peers with an invalid gossip address
 
-The set of `CrdsFilter`s is then partitioned in pull requests between the gathered peers selected randomly using their weights calculated as follows: 
+The set of `CrdsFilter`s is then partitioned into individual `CrdsFilter`s. Each `CrdsFilter` is put into a pull request and sent to a peer that is selected via a weighted random shuffle as follows:
     
   ```
     stake = min(node_stake, peer_stake[i])
@@ -326,13 +328,13 @@ The set of `CrdsFilter`s is then partitioned in pull requests between the gather
   
 The higher the node's weight, the more pull requests will be sent to it.
 
-Each pull request contains one of the `CrdsFilter`s from the list and the requesting node's  `LegacyContactInfo` as a `CrdsValue`. The node's `LegacyContactInfo` contains details of the node that sent the pull request - a list of its IP addresses, public key and wallclock. 
+Each pull request contains one of the `CrdsFilter`s from the list and the requesting node's `LegacyContactInfo` as a `CrdsValue`. The node's `LegacyContactInfo` contains details of the node that sent the pull request - a list of its IP addresses, public key and wallclock. 
 
-When a node receives a pull request it inserts the pull request value, `LegacyContactInfo`, into its `crds`, or updates the existing one in case of duplicate. Then, it checks whether the pull request comes from a valid address as a pull response needs to be sent back. Next, the node checks the pull request wallclock value - if it's not within 15 seconds of the current node's wallclock the request is ignored. Otherwise, a node gathers its own data from the `crds` table and checks if the data it holds exists in the provided `CrdsFilter`. 
+When a node receives a pull request, it inserts the pull request value, `LegacyContactInfo`, into its `crds`, or updates the existing one in case of duplicate. Then, it checks whether the pull request comes from a valid address as a pull response needs to be sent back. Next, the node checks the pull request wallclock value - if it's not within 15 seconds of the current node's wallclock, the request is ignored. Otherwise, a node gathers its own data from the `crds` table and checks if the data it holds exists in the provided `CrdsFilter`. 
 
 As was already [explained](#crds), the `CrdsShards` structure holds a `shards` vector whose elements are index maps of `CrdsValue`s indexes in the `crds` table and their hashes. The `shards` vector allows the node to quickly find and filter out `CrdsValue`s that the pull request sender already has in its `crds`. 
 
-For simplicity, let's assume `shard_bits = 3`, `mask_bits = 3` and `mask = 001 = 1` (in reality `shard_bits = 12`, but it's easier to explain using less number of bits). The `shards` vector would look like this:
+For simplicity, let's assume `shard_bits = 3`, `mask_bits = 3` and `mask = 001 = 1` (in reality `shard_bits = 12`, but it's easier to explain using fewer number of bits). The `shards` vector would look like this:
 
 
 ```mermaid
@@ -424,6 +426,8 @@ When a node receives a pull response it processes its list of `CrdsValue`s:
 
 Nodes ping their peers from time to time to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
 
+### Gossip loop
+The gossip loop is an infinite loop, run by a node in a separate thread. The node generates there push messages, pull requests and pings, and refreshes its active set of nodes.
 
 ## TODOs
 
