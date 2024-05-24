@@ -334,7 +334,7 @@ When a node receives a pull request, it inserts the pull request value, `LegacyC
 
 As was already [explained](#crds), the `CrdsShards` structure holds a `shards` vector whose elements are index maps of `CrdsValue`s indexes in the `crds` table and their hashes. The `shards` vector allows the node to quickly find and filter out `CrdsValue`s that the pull request sender already has in its `crds`. 
 
-For simplicity, let us assume `shard_bits = 3`, `mask_bits = 3` and `mask = 001 = 1` (in reality `shard_bits = 12`, but it is easier to explain using fewer number of bits). The `shards` vector would look like this:
+For simplicity, let's assume `shard_bits = 3`, `mask_bits = 3` and `mask = 001 = 1` (in reality `shard_bits = 12`, but it is easier to explain using fewer number of bits). The `shards` vector would look like this:
 
 
 ```mermaid
