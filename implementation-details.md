@@ -189,7 +189,7 @@ Some nodes may receive the same message multiple times, e.g. node C will receive
 
 ##### Push active set of nodes
 
-Each node holds a _push active set of nodes_. It is a 25-element array because it represents the log2 distribution of the network's stake (largest stake holder is ~14 million SOL, log(14 million) = 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and Bloom filters holding origin public keys. The node uses this index map to check if the origin of the message exists in the peer's corresponding Bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
+Each node maintains a push active set of nodes, which is a 25-element array. This array size is chosen based on the log2 distribution of the network's stake, where the largest stakeholder holds approximately 14 million SOL (log(14 million) ≈ 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and Bloom filters holding origin public keys. The node uses this index map to check if the origin of the message exists in the peer's corresponding Bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
 
 ```rust
 struct PushActiveSet([PushActiveSetEntry; 25])
@@ -239,9 +239,9 @@ When a peer sends us a message from a given origin, its score is updated in RCE,
 
 > _Example_
 >
-> Take a look at the example from the beginning of this chapter. Node C would increase the score of A and B when it received the message `Ma`. The `num_upserts` would be also increased, but only once - when the `Ma` came from node A as this value does not changes when receiving duplicates. 
+> Take a look at the example from the beginning of this chapter. When node C receives the message `Ma`, it increases the scores of both node A and node B. The `num_upserts` value is also incremented, but only once, as it increases only when the original `Ma` message is received from node A and does not change upon receiving duplicates.
 >
->Let us say there is also a node G that sends `Ma` to C, but G sends the message after nodes A and B. In this case G score would remain unchanged. The same would be for any other node sending `Ma` to C. Scores are only increased for the first two nodes that sent a message from a given origin. 
+>Let's say there is also a node G that sends `Ma` to C, but G sends the message after nodes A and B. In this case, G's score would remain unchanged. The same would be for any other node sending `Ma` to C. Scores are only increased for the first two nodes that sent a message from a given origin. 
 >
 >After receiving the `Ma` message, C would have three scores stored in RCE for the origin A: for both nodes A and B the score would be 1, for G it would be 0, and the `num_upserts` value would be 1.
 
@@ -265,7 +265,7 @@ where:
 * `stake` - our node's stake
 * `origin_stake` - stake of the origin node.
 
-Let us explain the algorithm above:
+Let's explain the algorithm above:
 * nodes are sorted descending based on their score, if the score is equal nodes are sorted descending by stake
 * their stakes are summed up starting from the highest score node and going down the list to nodes with lower score
 * we ensure at least 2 nodes are always kept: `if > 1 && ...`
@@ -274,7 +274,7 @@ Let us explain the algorithm above:
 
 ### Pruning nodes
 
-When a node wants to prune some of its peers it sends a prune message. We already know that pruning is based on the receive cache score and peer stake. In the example posted above node G has a low score in the receive cache of node C for messages originating from node A. Therefore node C sends a prune message to G with a list of origins to prune (this list includes origin A), which means - hey G do not send me messages originating from A anymore.
+When a node wants to prune some of its peers, it sends a prune message. We already know that pruning is based on the receive cache score and peer stake. In the example posted above, node G has a low score in the receive cache of node C for messages originating from node A. Therefore, node C sends a prune message to G with a list of origins to prune (this list includes origin A), which means - hey G do not send me messages originating from A anymore.
 
 
 The node receiving the prune message will update its active set of nodes and add pruned origins to the Bloom filter corresponding to the public key that sent the prune message. In the above example, node G receiving the prune message will add A into the Bloom filters of peer C in the active set of nodes. Then, whenever G would like to send a push message to C, G will first check which message origins are pruned by C by checking the Bloom filter. If the push message originated from A, G will not send it to C.
@@ -416,11 +416,11 @@ Finally, all remaining `CrdsValue`s values are sent back to the origin of the pu
 
 Pull responses contain a list of `CrdsValue`s filtered using the Bloom filter provided in a pull request. These are the values that the node sending the pull request was missing in its `crds`.
 
-When a node receives a pull response it processes its list of `CrdsValue`s:
-* values that do not exist in the nodes `crds` table or exist and have newer timestamps are inserted into `crds`, their owners `LegacyContactInfo` timestamps are updated in the `crds`
+When a node receives a pull response, it processes the list of `CrdsValue`s contained within the pull response:
+* values that do not exist in the nodes `crds` table or exist and have newer timestamps are inserted into `crds`, and their owners `LegacyContactInfo` timestamps are updated in the `crds`
 * values with expired timestamps are also inserted, but without updating owner timestamps
-* hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as failed inserts to prevent peers from sending them back (they are used when constructing Bloom filter for next pull requests).
-* values pruned from `crds` table (i.e. overwritten values) are stored as purged values and also used for constructing Bloom filter for the next pull requests
+* hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed inserts` to prevent peers from sending them back (they are used when constructing Bloom filter for next pull requests).
+* values pruned from `crds` table (i.e. overwritten values) are stored as `purged values` and also used for constructing Bloom filter for the next pull requests
 
 ### Ping and pong messages
 
