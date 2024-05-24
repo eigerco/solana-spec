@@ -83,8 +83,8 @@ Verification is handled differently according to the type of message:
 * pull request - the received `CrdsValue` is verified using the message's signature and sender's public key,
 * pull response, push message - each `CrdsValue` from the incoming array is verified using the message's signature and sender's public key of the respective `CrdsValue`
 * prune message - the received `PruneData` is verified using the message's signature and sender's public key,
-* ping - the received token is verified using the message's signature and sender's public key
-* pong - hash of the received ping token is verified using the message's signature and sender's public key
+* ping - the received token is verified using the message's signature and the sender's public key
+* pong - hash of the received ping token is verified using the message's signature and the sender's public key
 
 Only successfully verified packets are processed in the next step.
 
@@ -417,7 +417,7 @@ Finally, all remaining `CrdsValue`s values are sent back to the origin of the pu
 Pull responses contain a list of `CrdsValue`s filtered using the Bloom filter provided in a pull request. These are the values that the node sending the pull request was missing in its `crds`.
 
 When a node receives a pull response, it processes the list of `CrdsValue`s contained within the pull response:
-* values that do not exist in the nodes `crds` table or exist and have newer timestamps are inserted into `crds`, and their owners `LegacyContactInfo` timestamps are updated in the `crds`
+* values that do not exist in the nodes `crds` table or exist and have newer timestamps are inserted into `crds`, and their owner's `LegacyContactInfo` timestamps are updated in the `crds`
 * values with expired timestamps are also inserted, but without updating owner timestamps
 * hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed inserts` to prevent peers from sending them back (they are used when constructing Bloom filter for next pull requests).
 * values pruned from `crds` table (i.e. overwritten values) are stored as `purged values` and also used for constructing Bloom filter for the next pull requests
