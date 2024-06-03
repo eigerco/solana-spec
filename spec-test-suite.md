@@ -45,6 +45,9 @@ The test index makes use of symbolic language in describing connection and messa
 | `>> C` | A synthetic node broadcasts a message `C` to set of nodes in the cluster |
 | `<< D` | Solana node broadcasts a message `D` to set of nodes in the cluster |
 | `<- [no-reply]` | Solana node doesn't answer with a reply |
+| `<>` | The synthetic node joined the cluster |
+| `LNx` | Local node `x` |
+| `SNx` | Synthetic node `x` |
 
 
 ## Conformance
@@ -73,6 +76,8 @@ The test index makes use of symbolic language in describing connection and messa
 
     The node correctly rejects ping request after receiving an invalid hash in the prior pong response.
 
+    <> the node joins our cluster
+    <- ...
     <- ping (token-1)
     -> pong (invalid token-1 hash)
     -> ping (token-2)
@@ -90,6 +95,46 @@ The test index makes use of symbolic language in describing connection and messa
 
     Assert: the node’s ignores the ping message.
 
+### GOSSIP-CONFORMANCE-005
+
+    The synthetic node joins the cluster.
+
+    -> PushMessage[NodeInstance]
+    -> PushMessage[Version]
+    -> Ping (token1)
+    -> PullRequest[LegacyContactInfo]
+
+    Expect messages:
+    <- Pong (token1 hash)
+    <- Ping (token2)
+    <- PullRequest[...]
+    <- PushMessage[...]
+
+    Assert: all listed messages should be received.
+
+### GOSSIP-CONFORMANCE-006
+
+    The synthetic node represents the cluster and the node uses synthetic node's address as an entrypoint to join the cluster.
+
+    <- PushMessage[NodeInstance]
+    <- PushMessage[Version]
+    <- Ping (token1)
+    <- PullRequest[LegacyContactInfo]
+    <- ...
+
+    Assert: all listed messages should be received from the node that is joining our cluster.
+
+### GOSSIP-CONFORMANCE-007
+
+    Two synthetic node joins the cluster of two nodes.
+    Each synthetic node joins the cluster using the separate node as an entrypoint node.
+
+    <> LN1 with SN1
+    <> LN2 with SN2
+    SN2: LN2<- PushMessage[LegacyContactInfo(SN1)]
+
+    Assert: The legacy contact info belonging to one synthetic node is shared with the second synthetic node through the cluster.
+
 ### GOSSIP-CONFORMANCE-example-for-push-message
 
     Start a local cluster of Solana nodes and test the push message mechanism in regards to size of the active set.
@@ -97,7 +142,7 @@ The test index makes use of symbolic language in describing connection and messa
     Setup:
     - start a local node cluster of three nodes
     - start 10 synthetic nodes which join the cluster
-    
+
     << push message
 
     Assert: At no point, no more than 9 nodes will receive a push message from the same node.
