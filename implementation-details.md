@@ -30,6 +30,9 @@ The push messages are [propagated further](#propagating-push-messages-over-a-clu
 
 When the connection with the cluster is established, the node can fully participate in the gossip - it can update the cluster with its data (push messages) and receive data from its peers through received push messages and by sending pull requests and receiving the corresponding pull responses.
 
+### Keeping the connection alive
+To keep the connection with other nodes, nodes must constantly exchange messages. Nodes in the cluster send around 30-40 pull requests per second and push messages every 7.5 seconds. If a node stops sending pull requests and push messages for more than 15 seconds it will be ignored by other nodes and will not receive any push messages or pull requests. Sending ping messages only is not enough, node needs to send push messages or pull requests at least every 15 seconds to keep the connection alive.
+
 ## Data management
 
 When a Solana node receives data from a peer it processes it in several steps:
@@ -428,12 +431,3 @@ Nodes ping their peers from time to time to see whether they are active. They cr
 
 ### Gossip loop
 The gossip loop is an infinite loop executed by a node in a separate thread. In this loop, the node generates push messages, pull requests, and pings, while also refreshing its active set of nodes.
-
-## TODOs
-
-* _how often the nodes should send ping messages_
-* _how much time the node has to reply to a ping message_
-* _how much time the node has to reply to pull request_
-* _what happens if the node ignores the prune message and sends the push message anyway to everybody_
-* _how often the node needs to send push message (is that also every 7,5 sec?)_
-* _more details about each data type_
