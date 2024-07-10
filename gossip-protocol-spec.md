@@ -14,6 +14,7 @@ Each message contains data specific to its type: values that nodes share between
 > **Naming conventions used in this document**
 > - _Node_ - a validator running the gossip
 > - _Peer_ - a node sending or receiving messages from the current node we're talking about
+> - _Entrypoint_ - the gossip address of the peer the node will initially connect to
 > - _Origin_ - node, the original creator of the message
 > - _Cluster_ - a network of validators with a leader that produces blocks
 > - _Leader_ - node, the leader of the cluster in a given slot
@@ -266,6 +267,24 @@ struct PruneData {
 
 </details>
 
+**Note**: for signing purposes, before serializing, the `PruneData` struct is prefixed with the byte array `[0xff, 'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'R', 'U', 'N', 'E', '_', 'D', 'A', 'T', 'A']`.
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+#[derive(Serialize)]
+struct SignDataWithPrefix<'a> {
+    prefix: &'a [u8], // Should be a b"\xffSOLANA_PRUNE_DATA"
+    pubkey: &'a Pubkey,
+    prunes: &'a [Pubkey],
+    destination: &'a Pubkey,
+    wallclock: u64,
+}
+```
+
+</details>
+
 
 ### Ping message
 Nodes send ping messages frequently to their peers to check whether they are active. The node receiving the ping message should respond with a [pong message](#pong-message).
@@ -303,9 +322,8 @@ Sent by node as a response to the [ping message](#ping-message).
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` |`[u8, 32]` | 32 | public key of the origin |
-| `hash` |`[u8, 32]` | 32 | hash of the received ping token |
+| `hash` |`[u8, 32]` | 32 | hash of the received ping token prefixed by the "SOLANA_PING_PONG" string |
 | `signature` |`[u8, 64]` | 64 | signature of the message |
-
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -1060,6 +1078,66 @@ struct RestartHeaviestFork {
     last_slot_hash: Hash,
     observed_stake: u64,
     shred_version: u16,
+}
+```
+</details>
+
+# Addendum
+
+## IP Echo Server
+
+The IP Echo Server is a server running on the TCP socket on the same gossip address. (e.g. if the node is running the gossip service on UDP socket 192.0.0.1:9000, then the IP server port is running on the same TCP socket 192.0.0.1:9000).
+
+Before the node starts the gossip service, the node first needs to:
+- find out the shred version of the cluster,
+- discover its public IP address,
+- check TCP/UDP port reachability.
+
+All of these are discovered via the IP echo server running on one of the provided entrypoint nodes. Note: all validators run an IP Echo Server.
+The node should create sockets with ports that need to be checked and then send an IP echo server request message to one of the entrypoint nodes.
+The entrypoint node will then check reachability for all ports listed in the request and then it will respond with an IP echo server response containing the `shred_version` and public IP of the node.
+
+#### IpEchoServerMessage
+
+IP echo server message request containing a list of ports whose reachability should be checked by the server:
+- UDP ports - the server should send a single byte `[0x00]` packet to the socket.
+- TCP ports - the server should establish a TCP connection with every TCP socket.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `tcp_ports` | `[u16, 4]`| 64 | TCP ports that should be checked |
+| `udp_ports` | `[u16, 4]`| 64 | UDP ports that should be checked |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+/// Echo server message request.
+pub struct IpEchoServerMessage {
+    pub tcp_ports: [u16; 4],
+    pub udp_ports: [u16; 4],
+}
+```
+</details>
+
+#### IpEchoServerResponse
+IP echo server message response.
+
+| Data | Type | Size | Description |
+|------|:----:|:----:|-------------|
+| `address` | [`IpAddr`](#ipaddr) | 4 or 16 | public IP of the node that sent the request |
+| `shred_version` | `u16`| 2 | shred verion of the cluster |
+
+<details>
+  <summary>Solana client Rust implementation</summary>
+
+```rust
+/// Echo server response.
+pub struct IpEchoServerResponse {
+    /// Public IP address of request echoed back to the node.
+    pub address: IpAddr,
+    /// Cluster shred-version of the node running the server.
+    pub shred_version: Option<u16>,
 }
 ```
 </details>

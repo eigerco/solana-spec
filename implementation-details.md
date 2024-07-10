@@ -10,6 +10,7 @@ Each Solana node participates in gossip in one of two modes:
 > **Naming conventions used in this document**
 > - _Node_ - a validator running the gossip
 > - _Peer_ - a node sending or receiving messages from the current node we are talking about
+> - _Entrypoint_ - the gossip address of the peer the node will initially connect to
 > - _Origin_ - node, the original creator of the message
 > - _Cluster_ - a network of validators with a leader that produces blocks
 > - _Leader_ - node, the leader of the cluster in a given slot
@@ -22,16 +23,31 @@ Each Solana node participates in gossip in one of two modes:
 
 ## Connecting to the cluster
 
-When connecting a node to the cluster, the node operator must specify an entrypoint. The entrypoint is the gossip address of the peer the node is going to initially connect to. The node starts up and then advertises itself to the cluster by sending messages to the peer identified by the entrypoint. The node sends:
-* two [push messages](#push-messages) containing its own [`Version`](gossip-protocol-spec.md#version) and [`NodeInstance`](gossip-protocol-spec.md#nodeinstance) 
-* a [pull request](#pull-requests) that contains the node's own [`LegacyContactInfo`](gossip-protocol-spec.md#legacycontactinfo)
+When connecting a node to the cluster, the node operator must specify at least one entrypoint. The entrypoint is the gossip address of the peer the node will initially connect to.
 
-The push messages are [propagated further](#propagating-push-messages-over-a-cluster) to other nodes in the cluster. Soon after that, the node should start receiving [pull responses](#pull-responses), push messages, and [pings](#ping-and-pong-messages) from other nodes. 
+Before the Gossip service is started, the node must discover the cluster shred version and check its own ports.
+The node does this by sending a request to the entrypoint's IP echo server that is listening on a TCP endpoint on the gossip address.
+The node sends an IP echo server request with a list of UDP and TCP ports whose availability needs to be checked by the entrypoint node.
+The entrypoint node tries to establish a connection with the requesting node's TCP ports and sends packets to the UDP ports. The entrypoint node then replies back with the IP echo server response containing the public address of the requesting node and the cluster shred version.
+
+The node starts the Gossip service and then advertises itself to the cluster by sending messages to the peer identified by the entrypoint. The node sends:
+* two [push messages](#push-messages) containing its own [`Version`](gossip-protocol-spec.md#version) and [`NodeInstance`](gossip-protocol-spec.md#nodeinstance),
+* a [pull request](#pull-requests) that contains the node's own [`LegacyContactInfo`](gossip-protocol-spec.md#legacycontactinfo).
+
+The push messages are [propagated further](#propagating-push-messages-over-a-cluster) to other nodes in the cluster. Soon after that, the node should start receiving [pull responses](#pull-responses), push messages, and [pings](#ping-and-pong-messages) from other nodes.
 
 When the connection with the cluster is established, the node can fully participate in the gossip - it can update the cluster with its data (push messages) and receive data from its peers through received push messages and by sending pull requests and receiving the corresponding pull responses.
 
+However, for the node to switch from the default `spy` mode to the `gossip` mode, it awaits a `SnapshotHashes` message from the cluster.
+Once it receives the message, the node will try to download the snapshots from any known RPC servers in the cluster.
+After the snapshot downloads, the node runs in `gossip` mode.
+
 ### Keeping the connection alive
-To keep the connection with other nodes, nodes must constantly exchange messages. Nodes in the cluster send around 30-40 pull requests per second and push messages every 7.5 seconds. If a node stops sending pull requests and push messages for more than 15 seconds it will be ignored by other nodes and will not receive any push messages or pull requests. Sending ping messages only is not enough, node needs to send push messages or pull requests at least every 15 seconds to keep the connection alive.
+To keep the connection with other nodes, nodes must constantly exchange messages.
+Nodes in the cluster send lots of pull requests per second and push messages every 7.5 seconds.
+If a node stops sending pull requests and push messages for more than 15 seconds it will be ignored by other nodes and will not receive any push messages or pull requests.
+Sending ping messages only is not enough. The node must send its `ContactInfo` at least every 15 seconds to keep the connection alive. The node can do this through PushMessages or a combination of PushMessages and PullRequests.
+Otherwise, if the node stops sending `ContactInfo`, eventually, other nodes will purge the node's contact info from their CRDS table.
 
 ## Data management
 
