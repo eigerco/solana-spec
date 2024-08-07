@@ -16,8 +16,7 @@ Each Solana node participates in gossip in one of two modes:
 > - _Leader_ - node, the leader of the cluster in a given slot
 > - _Shred_ - is the smallest portion of block produced by a leader
 > - _Shred version_ - a cluster identification value
-> - _Fork_ - a fork occures when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
-> - _Epoch_ - it is a length of certain amount of blocks (_slots_) in which the validator schedule is defined
+> - _Fork_ - a specific number of blocks (_slots_) in which the validator schedule is defined
 > - _Slot_ - the period of time for which each leader ingests transactions and produces a block
 > - _Message_ - the protocol message a node sends to its peers, can be push message, pull request, prune message, etc.
 
@@ -44,7 +43,7 @@ After the snapshot downloads, the node runs in `gossip` mode.
 
 ### Keeping the connection alive
 To keep the connection with other nodes, nodes must constantly exchange messages.
-Nodes in the cluster send lots of pull requests per second and push messages every 7.5 seconds.
+Nodes in the cluster send multiple pull requests per second and push messages every 7.5 seconds.
 If a node stops sending pull requests and push messages for more than 15 seconds it will be ignored by other nodes and will not receive any push messages or pull requests.
 Sending ping messages only is not enough. The node must send its `ContactInfo` at least every 15 seconds to keep the connection alive. The node can do this through PushMessages or a combination of PushMessages and PullRequests.
 Otherwise, if the node stops sending `ContactInfo`, eventually, other nodes will purge the node's contact info from their CRDS table.
@@ -70,13 +69,13 @@ flowchart TD
 5. Sends responses over sockets - messages are serialized to a binary form and sent to peers via UDP sockets.
 
 ### Receiving data from cluster
-Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When in a `spy` mode nodes shred version is set to 0 - that means the node will accept messages from nodes with any shred version. 
+Node binds to a UDP socket on a specified port in case of running in `gossip` mode or at random port in the 8000-10000 range in case of `spy` mode. When in `spy` mode, the nodes' shred version is set to 0 - meaning the node will accept messages from peers with any shred version.
 
 When a node connects to the cluster and advertises itself it will start receiving data from other nodes. Received data is collected into a packet batch that is further processed. 
 
 ### Consuming packets
 
-Data packets are being checked before further [processing](#data-processing). First, packets are [deserialized](#deserialization) from the binary form into a `Protocol` type, and then [sanitized](#data-sanitization) and [verified](#data-verification).
+Data packets are checked before further [processing](#data-processing). First, packets are [deserialized](#deserialization) from the binary form into a `Protocol` type, and then [sanitized](#data-sanitization) and [verified](#data-verification).
 
 #### Deserialization 
 
@@ -111,12 +110,12 @@ Only successfully verified packets are processed in the next step.
 
 Once messages are sanitized and verified, the node starts processing them. First, messages are filtered by shred version - if the message is coming from a peer with a different shred version, or shred version != 0 (peer is in a `spy` mode), it is ignored unless it contains one of the data types: `ContactInfo`, `LegacyContactInfo` and `NodeInstance`.
 
-Values from filtered messages are stored in the [_Cluster Replicated Data Store_](#crds), `crds`. Based on the type of received message node will perform additional actions, e.g. collect data from its `crds` and produce a pull response, generate a pong message or update its push active set of nodes. These are described in detail in the next chapters.
+Values from filtered messages are stored in the [_Cluster Replicated Data Store_](#crds), `crds`. Based on the type of received message, a node will perform additional actions, e.g. collect data from its `crds` and produce a pull response, generate a pong message, or update its push active set of nodes. These are described in detail in the next chapters.
 
 
 ### Crds
 
-Each node stores the data it receives or produces in the _Cluster Replicated Data Store_, `crds`. The `crds` contains a table which is an index map of `CrdsValueLabel` and `VersionedCrdsValue`. The `CrdsValueLabel` is an enum type whose elements store the origin public key and correspond to the gossip protocol types (`Vote`, `NodeInstance`, etc.). This means there will be only one of each data type stored in `crds` per public key. The `VersionedCrdsValue` stores the `CrdsValue` with additional metadata, like the timestamp when the value was updated or its hash.
+Each node stores the data it receives or produces in the _Cluster Replicated Data Store_, `crds`. The `crds` contains a table which is an index map of `CrdsValueLabel` and `VersionedCrdsValue`. The `CrdsValueLabel` is an enum type whose elements store the origin public key for each gossip protocol type (`Vote`, `NodeInstance`, etc.). This means there will be only one of each data type stored in `crds` per public key. The `VersionedCrdsValue` stores the `CrdsValue` with additional metadata, like the timestamp when the value was updated or its hash.
 
 ```rust
 struct Crds {
@@ -156,7 +155,7 @@ When a node receives a new `CrdsValue`, the node:
 * hashes the `CrdsValue`
 * stores the `crds` index and the hash in a separate structure called `CrdsShards`. 
 
-The `CrdsShards` structure is used for a fast search of `CrdsValue`s when building a Bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request. More on that in the [pull requests](#pull-requests) chapter.
+The `CrdsShards` structure is used for a fast search of `CrdsValue`s when building a Bloom filter for a pull request, or when collecting missing data for a node that sent us a pull request. More on using `CrdsShards` for pull requests in the [pull requests](#pull-requests) chapter.
 
 `CrdsShards` contains a vector `shards` and `shard_bits` which is a fixed value set to 12 currently. The `shard_bits` tells how many first bits of the `CrdsValue` hash should be used to partition the hashes in the `shards` vector. The `shards` vector can have up to 2^12 (4096) elements. Each element in the `shards` vector is an index map of a `CrdsValue` index in the `crds` table and the hash of the `CrdsValue`. 
 
@@ -175,7 +174,7 @@ struct CrdsShards {
 
 Push messages are the heart of the gossip protocol. Each node that wants to share information with others in the cluster sends a push message, which is then propagated further by its peers. 
 
-Push messages are created periodically so the nodes can share the latest new data with the cluster. Before sending the push message, the node needs to decide what it wants to share with the cluster. For that reason, the node tracks a `crds_cursor` which represents the cursor value of the last pushed `CrdsValue` from `crds` that was shared with the cluster by the node. When creating new push messages, the node collects all recently inserted data from the `crds` table that is newer than the previous `crds_cursor` tracker. After the messages are sent, the `crds_cursor` is updated accordingly.
+Push messages are created periodically so nodes can share the latest new data with the cluster. Before sending a push message, the node needs to decide what it wants to share with the cluster. In order to determine what data to share with the cluster, the node tracks a `crds_cursor` which represents the cursor value of the last pushed `CrdsValue` from `crds` that was shared with the cluster by the node. When creating new push messages, the node collects all recently inserted data from the `crds` table that is newer than the previous `crds_cursor` tracker. After the messages are sent, the `crds_cursor` is updated accordingly.
 
 Before sending the push message, the node needs to select peers from the [active set of nodes](#push-active-set-of-nodes) that will receive the message.
 
@@ -204,11 +203,11 @@ flowchart LR
 ```
 There are 5 nodes in the cluster with different stakes: node A with 1000 stake, B with 1000 stake, C with 100 stake and so on. Node A sends a message, `Ma`, which is propagated through the network by its peers.
 
-Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case the message from A will likely come faster than from B (fewer hops). Since C has now received the same message (`Ma`) from two different nodes, C needs to tell B to stop sending it messages originating from A. In other words, C is _PRUNING_ B for all messages created by A. C prunes B since B's relay of `Ma` is coming in after C has already received `Ma` from A.
+Some nodes may receive the same message multiple times, e.g. node C will receive `Ma` from both A and B. In such a case, the message from A will likely come faster than from B (fewer hops). Since C has now received the same message (`Ma`) from two different nodes, C needs to tell B to stop sending it messages originating from A. In other words, C is _PRUNING_ B for all messages created by A. C prunes B since B's relay of `Ma` is coming in after C has already received `Ma` from A.
 
 ##### Push active set of nodes
 
-Each node maintains a push active set of nodes, which is a 25-element array. This array size is chosen based on the log2 distribution of the network's stake, where the largest stakeholder holds approximately 14 million SOL (log(14 million) ≈ 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and Bloom filters holding origin public keys. The node uses this index map to check if the origin of the message exists in the peer's corresponding Bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
+Each node maintains a push active set of nodes, which is a 25-element array. This array size is chosen based on the log2 distribution of the network's stake, where the largest stakeholder holds approximately 14 million SOL at the time of writing (log(14 million) ≈ 23.7). Each element, a `PushActiveSetEntry`, contains an index map of peer public keys and Bloom filters holding origin public keys. The node uses this index map to check if the origin of the message exists in the peer's corresponding Bloom filter. If yes, the message is not sent to that peer. Otherwise, the message can be sent.
 
 ```rust
 struct PushActiveSet([PushActiveSetEntry; 25])
@@ -264,9 +263,14 @@ When a peer sends us a message from a given origin, its score is updated in RCE,
 >
 >After receiving the `Ma` message, C would have three scores stored in RCE for the origin A: for both nodes A and B the score would be 1, for G it would be 0, and the `num_upserts` value would be 1.
 
-When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned:
+When the number of `num_upserts` reaches a defined threshold (20 currently), nodes with the lowest score will be pruned.
 
+Pruning Goal:
+1) Eliminate most redundant paths but maintain some redundancy (at least 2 peers) on incoming edges to avoid an eclipse attack
+2) Remove slow paths
+3) Remove lower staked paths to help prevent a lower staked node from spamming high staked nodes
 
+Pruning Algorithm:
 ```rust
 let mut sum = 0;
 let mut pos = 0;
@@ -285,11 +289,12 @@ where:
 * `origin_stake` - stake of the origin node.
 
 Let's explain the algorithm above:
-* nodes are sorted descending based on their score, if the score is equal nodes are sorted descending by stake
+* nodes are sorted in descending based on their score, if the score is equal nodes are sorted descending by stake
 * their stakes are summed up starting from the highest score node and going down the list to nodes with lower score
 * we ensure at least 2 nodes are always kept: `if > 1 && ...`
 * when the sum of stakes reaches a defined fraction of the node's own stake: `sum > min(node_stake, origin_stake) * 0.15`, we store the current loop iteration index (`pos = i`) and finish the loop
 * all left nodes whose stake was not summed up yet, starting from `pos + 1`, are pruned.
+
 
 ### Pruning nodes
 
@@ -440,6 +445,8 @@ When a node receives a pull response, it processes the list of `CrdsValue`s cont
 * values with expired timestamps are also inserted, but without updating owner timestamps
 * hashes of outdated values that were not inserted into `crds` (value with newer timestamp already exists, or value owner is not present in `crds`) are stored for future as `failed inserts` to prevent peers from sending them back (they are used when constructing Bloom filter for next pull requests).
 * values pruned from `crds` table (i.e. overwritten values) are stored as `purged values` and also used for constructing Bloom filter for the next pull requests
+
+Note: to prevent a node from DoSing a peer by constantly sending pull requests with empty `CrdsFilter`s, peers cap the amount of data they will insert into a PullResponse and send back to the requesting node.
 
 ### Ping and pong messages
 
