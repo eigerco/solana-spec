@@ -8,21 +8,22 @@ Solana nodes communicate with each other and share data using the gossip protoco
 * ping
 * pong
 
-Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses.
+Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses. However, the gossip protocol provides no propagation guarantees and `crds`'s across nodes will differ.
 
 > [!Tip]
 > **Naming conventions used in this document**
 > - _Node_ - a validator running the gossip
-> - _Peer_ - a node sending or receiving messages from the current node we're talking about
+> - _Peer_ - a node sending or receiving messages from the current node we are talking about
 > - _Entrypoint_ - the gossip address of the peer the node will initially connect to
 > - _Origin_ - node, the original creator of the message
 > - _Cluster_ - a network of validators with a leader that produces blocks
 > - _Leader_ - node, the leader of the cluster in a given slot
 > - _Shred_ - is the smallest portion of block produced by a leader
 > - _Shred version_ - a cluster identification value
-> - _Fork_ - a fork occures when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
-> - _Epoch_ - it is a length of certain amount of blocks (_slots_) in which the validator schedule is defined
+> - _Fork_ - a fork occurs when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
+> - _Epoch_ - a specific number of blocks (_slots_) in which the validator schedule is defined
 > - _Slot_ - the period of time for which each leader ingests transactions and produces a block
+> - _Message_ - the protocol message a node sends to its peers, can be push message, pull request, prune message, etc.
 
 
 ## Message format
@@ -131,7 +132,7 @@ In the first case, the serialized object of the `CompressionType` enum will only
 Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
 
 ### Push message
-It is sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
+Sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
 
 A node receiving a set of push messages will:
 
@@ -159,7 +160,7 @@ enum Protocol {
 </details>
 
 ### Pull request
-A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [pull response](#pull-response) packed with missing `CrdsValue`s data for the pull request origin.
+A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [pull response](#pull-response) packed with missing `CrdsValue`s data for the pull request sender.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -229,7 +230,7 @@ enum Protocol {
 
 
 ### Prune message
-It is sent to peers with a list of origin nodes that should be pruned. No more push messages from pruned origin nodes should be sent by the recipient of this prune message to its sender.
+Sent to peers with a list of origin nodes that should be pruned. No more push messages from pruned origin nodes should be sent by the recipient of this prune message to its sender.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -345,7 +346,7 @@ struct Pong {
 
 ## Data shared between nodes
 
-The `CrdsValue` values that are sent in push messages, pull requests & pull responses contain the signature and the actual shared data:
+The `CrdsValue` values that are sent in push messages, pull requests, & pull responses contain the signature and the actual shared data:
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|

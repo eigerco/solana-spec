@@ -16,7 +16,8 @@ Each Solana node participates in gossip in one of two modes:
 > - _Leader_ - node, the leader of the cluster in a given slot
 > - _Shred_ - is the smallest portion of block produced by a leader
 > - _Shred version_ - a cluster identification value
-> - _Fork_ - a specific number of blocks (_slots_) in which the validator schedule is defined
+> - _Fork_ - a fork occurs when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
+> - _Epoch_ - a specific number of blocks (_slots_) in which the validator schedule is defined
 > - _Slot_ - the period of time for which each leader ingests transactions and produces a block
 > - _Message_ - the protocol message a node sends to its peers, can be push message, pull request, prune message, etc.
 
