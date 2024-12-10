@@ -4,7 +4,9 @@ This repository contains documentation and implementation details related to the
 
 ## Overview
 
-Solana nodes communicate with each other using a custom gossip protocol to maintain data consistency across the network. This protocol allows nodes to share information, such as the current state of their replicated data stores, by sending various types of messages. The protocol plays a crucial role in ensuring that all nodes in the cluster stay synchronized.
+Solana nodes communicate with each other using a custom gossip protocol to maintain data consistency across the network.
+This protocol allows nodes to share information, such as the current state of their replicated data stores, by sending various types of messages.
+The protocol plays a crucial role in ensuring that all nodes in the cluster stay synchronized.
 
 ## Repository Contents
 
@@ -12,6 +14,7 @@ Solana nodes communicate with each other using a custom gossip protocol to maint
 
 - [implementation-details.md](./implementation-details.md): This document outlines the specifics of how the gossip protocol is implemented in Solana, including the modes in which nodes can operate and the networking details of gossip communication.
 
+- [spec-test-suite.md](./spec-test-suite.md): This is a copy of a test suite document from another private repository. The repository contains implementation for all listed tests and will eventually be made public.
 
 ## Contributing
 
