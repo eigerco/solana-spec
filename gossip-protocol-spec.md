@@ -62,7 +62,7 @@ block-beta
 ```
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ``` rust
 enum Protocol {
@@ -95,7 +95,7 @@ The **Size** column in the tables below contains the size of data in bytes. The 
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-In the Rust implementation of the Agave node, the data is serialized into a binary form using the [`bincode` crate][bincode] as follows:
+In the Rust implementation of the Solana node, the data is serialized into a binary form using the [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
 * array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be serialized as 32 16-bit elements which are equal to 64 bytes,
 * dynamically sized arrays always include an 8-byte header that specifies the array length, followed by the data bytes. Therefore, an empty array occupies 8 bytes,
@@ -147,7 +147,7 @@ A node receiving a set of push messages will:
 | `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum Protocol {
@@ -183,7 +183,7 @@ A node sends a pull request to ask the cluster for new information. It creates a
 | `num_bits` | `u64` | 8 | number of bits |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ``` rust
 
@@ -216,7 +216,7 @@ These messages are sent in response to a [pull request](#pull-request). They con
 | `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of new values  |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum Protocol {
@@ -248,7 +248,7 @@ Sent to peers with a list of origin nodes that should be pruned. No more push me
 | `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum Protocol {
@@ -298,7 +298,7 @@ Nodes send ping messages frequently to their peers to check whether they are act
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum Protocol {
@@ -327,7 +327,7 @@ Sent by node as a response to the [ping message](#ping-message).
 | `signature` |`[u8, 64]` | 64 | signature of the message |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum Protocol {
@@ -354,7 +354,7 @@ The `CrdsValue` values that are sent in push messages, pull requests, and pull r
 | `data` | [`CrdsData`](#crdsdata) | ? | data  |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct CrdsValue {
@@ -384,7 +384,7 @@ The `CrdsData` is an enum and can be one of:
 | 13 | [RestartHeaviestFork](#restartheaviestfork) |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum CrdsData {
@@ -445,7 +445,7 @@ An enum, can be either a V4 or V6 socket address.
 | `port` | `u16` | 2 | port |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct LegacyContactInfo {
@@ -538,7 +538,7 @@ Contains a signature and a message with a sequence of instructions.
 | `data` | `[u8]` | 8+ | program input data |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 
@@ -616,7 +616,7 @@ Compression type enum.
 | 2 |  `BZip2`| bzip2 | 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 
@@ -662,7 +662,7 @@ _Deprecated_
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct AccountsHashes {
@@ -707,7 +707,7 @@ Contains a one-byte index and list of all slots from an epoch (epoch consists of
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum CrdsData {
@@ -745,7 +745,7 @@ struct Uncompressed {
 </details>
 
 #### LegacyVersion
-The older version of the Agave client the node is using.
+The older version of the Solana client the node is using.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -763,7 +763,7 @@ The older version of the Agave client the node is using.
 | `commit` | `u32 \| None`| 5 or 1 | commit |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct LegacyVersion {
@@ -782,13 +782,13 @@ struct LegacyVersion1 {
 </details>
 
 #### Version
-The version of the Agave client the node is using.
+The version of the Solana client the node is using.
 
 | Data | Type | Size | Description |
 |------|:----:|:-----:|-------------|
 | `from` | `[u8, 32]` | 32 | public key of origin |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
-| `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Agave client |
+| `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Solana client |
 
 
 ##### LegacyVersion2
@@ -801,7 +801,7 @@ The version of the Agave client the node is using.
 | `feature_set` | `u32`| 4 | feature set |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct Version {
@@ -832,7 +832,7 @@ Contains node creation timestamp and randomly generated token.
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct NodeInstance {
@@ -869,7 +869,7 @@ This enum is serialized as 1-byte data.
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 enum CrdsData {
@@ -911,7 +911,7 @@ Contains hashes of full and incremental snapshots.
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct SnapshotHashes {
@@ -932,7 +932,7 @@ Contact info of the node.
 | `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
 | `outset` | `u64`| 8 | timestamp when node instance was first created |
 | `shred_version` | `u16`| 2 | the shred version the node has been configured to use |
-| `version` | [`Version`](#version-1) | 13+ | Agave version |
+| `version` | [`Version`](#version-1) | 13+ | Solana version |
 | `addrs` | [`[IpAddr]`](#ipaddr) | 8+ | list of unique IP addresses |
 | `sockets` | [`[SocketEntry]`](#socketentry) | 8+ | list of unique sockets  |
 | `extensions` | [`[Extension]`](#extension) | 8+ | future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused |
@@ -965,7 +965,7 @@ Contact info of the node.
 _Currently empty_
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct ContactInfo {
@@ -1032,7 +1032,7 @@ Offsets are stored either in binary form (`RawOffsets`) or encoded as numbers of
 | 1 | `RawOffsets` | `b[u8]` | 9+ | raw offsets |
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct RestartLastVotedForkSlots {
@@ -1069,7 +1069,7 @@ Contains the heaviest fork.
 
 
 <details>
-  <summary>Agave client Rust implementation</summary>
+  <summary>Solana client Rust implementation</summary>
 
 ```rust
 struct RestartHeaviestFork {
