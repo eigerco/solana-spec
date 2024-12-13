@@ -55,11 +55,11 @@ When a Solana node receives data from a peer it processes it in several steps:
 
 ```mermaid
 flowchart TD
-  A(1. Receive data) --> B(2. Consume packets)
-  B --> C(3. Process messages)
-  C --> D(5. Send messages & responses)
+  A(1.Receive data) --> B(2.Consume packets)
+  B --> C(3.Process messages)
+  C --> D(5.Send messages & responses)
 
-  E(4. Gossip loop running in background) --> D
+  E(4.Gossip loop running in background) --> D
   E --> E
 ```
 
