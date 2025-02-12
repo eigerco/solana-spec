@@ -1,6 +1,6 @@
 # Gossip protocol
 
-Solana nodes communicate with each other and share data using the gossip protocol. They send messages in a binary form which need to be deserialized. There are 6 types of messages:
+Solana nodes communicate with each other and share data using the gossip protocol. Messages are exchanged in a binary format and need to be deserialized. There are six types of messages:
 * pull request
 * pull response
 * push message
@@ -8,7 +8,7 @@ Solana nodes communicate with each other and share data using the gossip protoco
 * ping
 * pong
 
-Each message contains data specific to its type: values that nodes share between them, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses. However, the gossip protocol provides no propagation guarantees and `crds`'s across nodes will differ.
+Each message contains data specific to its type, such as shared values, filters, pruned nodes, etc. Nodes keep their data in _Cluster Replicated Data Store_ (`crds`), which is synchronized between nodes via pull requests, push messages and pull responses.
 
 > [!Tip]
 > **Naming conventions used in this document**
@@ -18,10 +18,10 @@ Each message contains data specific to its type: values that nodes share between
 > - _Origin_ - node, the original creator of the message
 > - _Cluster_ - a network of validators with a leader that produces blocks
 > - _Leader_ - node, the leader of the cluster in a given slot
-> - _Shred_ - is the smallest portion of block produced by a leader
+> - _Shred_ - the smallest portion of block produced by a leader
 > - _Shred version_ - a cluster identification value
-> - _Fork_ - a fork occurs when two different blocks got chained to the same parent block (e.g. next block is created before the previous one was completed)
-> - _Epoch_ - a specific number of blocks (_slots_) in which the validator schedule is defined
+> - _Fork_ - a fork occures when two different blocks are chained to the same parent block (e.g. next block is created before the previous one was completed)
+> - _Epoch_ - a predefined period composed of a specific number of blocks (_slots_) in which the validator schedule is defined
 > - _Slot_ - the period of time for which each leader ingests transactions and produces a block
 > - _Message_ - the protocol message a node sends to its peers, can be push message, pull request, prune message, etc.
 
@@ -31,7 +31,7 @@ Each message contains data specific to its type: values that nodes share between
 Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). 
 
 
-Data sent in the message is serialized from a `Protocol` type, which can be one of:
+Data sent in each message is serialized from a `Protocol` type, which can be one of:
 
 | Enum ID  | Message                        | Data                      | Description |
 |:--------:|--------------------------------|---------------------------|------------|
@@ -39,8 +39,8 @@ Data sent in the message is serialized from a `Protocol` type, which can be one 
 | 1 | [pull response](#pull-response) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
 | 2 | [push message](#push-message)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
 | 3 | [prune message](#prune-message) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
-| 4 | [ping message](#ping-message)   | `Ping`                    | a ping message |
-| 5 | [pong message](#pong-message)   | `Pong`                    | response to a ping |
+| 4 | [ping message](#ping-message)   | `Ping`                    | sent by node to check for peers' liveliness |
+| 5 | [pong message](#pong-message)   | `Pong`                    | response to a ping (confirm liveliness) |
 
 
 ```mermaid
@@ -79,7 +79,7 @@ enum Protocol {
 
 ### Type definitions
 Fields described in the tables below have their types specified using Rust notation:
-* `u8` - 1 byte of unsigned data (8-bit unsigned integer)
+* `u8` - 8-bit unsigned integer
 * `u16` - 16-bit unsigned integer
 * `u32` - 32-bit unsigned integer, and so on...
 * `[u8]` - dynamic size array of 1-byte elements
@@ -91,15 +91,15 @@ Fields described in the tables below have their types specified using Rust notat
 * `MyStruct` - a complex type (either defined as a struct or a Rust enum), consisting of 
 many elements of different basic types
 
-The **Size** column in tables contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of the array header containing array length. 
+The **Size** column in the tables below contains the size of data in bytes. The size of dynamic arrays contains an additional _plus_ (`+`) sign, e.g. `32+`, which means the array has at least 32 bytes. Empty dynamic arrays always have 8 bytes which is the size of the array header containing array length. 
 In case the size of a particular complex data is unknown it is marked with `?`. The limit, however, is always 1232 bytes for the whole data packet (payload within the UDP packet).
 
 #### Data serialization
-In the Rust implementation of the Solana node, the data is serialized into a binary form using a [`bincode` crate][bincode] as follows:
+In the Rust implementation of the Solana node, the data is serialized into a binary form using the [`bincode` crate][bincode] as follows:
 * basic types, e.g. `u8`, `u16`, `u64`, etc. - are serialized as they are present in the memory, e.g. `u8` type is serialized as 1 byte, `u16` as 2 bytes, and so on,
 * array elements are serialized as above, e.g. `[u8; 32]` array is serialized as 32 bytes, `[u16; 32]` will be serialized as 32 16-bit elements which are equal to 64 bytes,
-* dynamically sized arrays have always an 8-byte header containing array length plus bytes of data, therefore empty arrays take 8 bytes,
-* bit vectors are serialized similar to dynamic arrays - their header contains 1-byte which tells whether there is any data in the vector, followed by 8-byte array length and the data,
+* dynamically sized arrays always include an 8-byte header that specifies the array length, followed by the data bytes. Therefore, an empty array occupies 8 bytes,
+* bit vectors are serialized similar to dynamic arrays - their header contains 1-byte which tells whether there is any data in the vector, followed by an 8-byte array length and the data,
 * [enum types](#enum-types) contain a header with a 4-byte discriminant (tells which enum variant is selected) + additional data,
 * option types are serialized using a 1-byte discriminant followed by the bytes of data. If a value is `None` discriminant is set to 0 and the data part is empty, otherwise it is set to 1 with data serialized according to its type,
 * struct fields are serialized one by one using the rules above,
@@ -125,14 +125,14 @@ struct SomeType {
     y: u16,
 }
 ```
-In the first case, the serialized object of the `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case apart from the header the serialized data will contain additional bytes according to which variant was selected: 
+In the first case, the serialized object of the `CompressionType` enum will only contain a 4-byte header with the discriminant value set to the selected variant (`0 = GZip`, `1 = Bzip2`). In the latter case, apart from the header, the serialized data will contain additional bytes according to which variant was selected: 
 * `Variant1`: 8 bytes
 * `Variant2`: 6 bytes (the sum of `x` and `y` fields of `SomeType` struct)
 
-Special care needs to be taken when deserializing such enum as according to the selected variant number of following data bytes may be different.
+When deserializing enums, it's important to handle them carefully because the amount of data that follows depends on the specific variant chosen.
 
 ### Push message
-Sent by nodes who want to share information with others. Nodes gather data from their `crds` and send push messages to their peers periodically.
+Nodes send push messages to share information with others. They periodically collect data from their `crds` and transmit push messages to their peers.
 
 A node receiving a set of push messages will:
 
@@ -160,12 +160,12 @@ enum Protocol {
 </details>
 
 ### Pull request
-A node sends a pull request to ask the cluster for new information. It creates a list of bloom filters for its `crds` values and sends different bloom filters to different peers. The recipients of pull requests check what info the sender is missing using the received bloom filter and then construct a [pull response](#pull-response) packed with missing `CrdsValue`s data for the pull request sender.
+A node sends a pull request to ask the cluster for new information. It creates a set of bloom filters populated with the hashes of the `CrdsValue`s in its `crds` table and sends different bloom filters to different peers. The recipients of the pull request use the received bloom filter to identify what information the sender is missing and then construct a [pull response](#pull-response) packed with the missing `CrdsValue` data for the origin of the pull request.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `CrdsFilter` | [`CrdsFilter`](#crdsfilter) | 37+ | a bloom filter representing things node already has |
-| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a value, usually a `LegacyContactInfo` of the node that sends the pull request containing node socket addresses for different protocols (gossip, tvu, tpu, rpc, etc.) |
+| `CrdsFilter` | [`CrdsFilter`](#crdsfilter) | 37+ | a bloom filter representing `CrdsValue`s the node already has |
+| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a value, usually a [`LegacyContactInfo`](#legacycontactinfo) of the node that sent the pull request |
 
 #### CrdsFilter
 
@@ -180,7 +180,7 @@ A node sends a pull request to ask the cluster for new information. It creates a
 |------|:----:|:----:|-------------|
 | `keys` | `[u64]` | 8+ | keys |
 | `bits` | `b[u64]` | 9+ | bits |
-| `num_bits_set` | `u64` | 8 | number of bits |
+| `num_bits` | `u64` | 8 | number of bits |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -208,7 +208,7 @@ struct Bloom {
 </details>
 
 ### Pull response
-These are sent in response to a [pull request](#pull-request). They contain filtered values from the node's `crds` which pull request origin is missing. 
+These messages are sent in response to a [pull request](#pull-request). They contain values from the node's `crds` table that the origin of the pull request is missing, as determined by the bloom filters received in the pull request.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -346,7 +346,7 @@ struct Pong {
 
 ## Data shared between nodes
 
-The `CrdsValue` values that are sent in push messages, pull requests, & pull responses contain the signature and the actual shared data:
+The `CrdsValue` values that are sent in push messages, pull requests, and pull responses contain the shared data and the signature of the data
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -378,7 +378,7 @@ The `CrdsData` is an enum and can be one of:
 | 7 | [Version](#version) |
 | 8 | [NodeInstance](#nodeinstance) |
 | 9 | [DuplicateShred](#duplicateshred) |
-| 10| [SnapshotHashes](#snapshothashes) |
+| 10 | [SnapshotHashes](#snapshothashes) |
 | 11 | [ContactInfo](#contactinfo) |
 | 12 | [RestartLastVotedForkSlots](#restartlastvotedforkslots) |
 | 13 | [RestartHeaviestFork](#restartheaviestfork) |
@@ -426,7 +426,7 @@ Basic info about the node. Nodes send this message to introduce themselves to th
 | `shred_version` | `u16` | 2 | the shred version node has been configured to use |
 
 ##### SocketAddr
-An enum, can be either V4 or V6 socket address.
+An enum, can be either a V4 or V6 socket address.
 | Enum ID | Data | Type | Size | Description |
 |:-------:|------|:----:|:----:|-------------|
 | 0 | `V4` | [`SocketAddrV4`](#socketaddrv4) | 10 | V4 socket address |
@@ -491,7 +491,7 @@ struct Ipv6Addr {
 </details>
 
 #### Vote
-It's a validator's vote on a fork. Contains a one-byte index from the vote tower (range 0 to 31) and vote transaction to be executed by the leader.
+A validator's vote on a fork. Contains a one-byte index from the vote tower (range 0 to 31) and the vote transaction to be executed by the leader.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -518,7 +518,7 @@ Contains a signature and a message with a sequence of instructions.
 |------|:----:|:----:|-------------|
 | `header` | [`MessageHeader`](#message-header) | 3 | message header |
 | `account_keys` | `[[u8; 32]]` | 8+ | all account keys used by this transaction |
-| `recent_blockhash` | `[u8; 32]` | 32 |hash of a recent ledger entry |
+| `recent_blockhash` | `[u8; 32]` | 32 | hash of a recent ledger entry |
 | `instructions` | [`[CompiledInstruction]`](#compiled-instruction) | 8+ | list of compiled instructions to execute |
 
 ##### Message header
@@ -586,7 +586,7 @@ struct CompiledInstruction {
 </details>
 
 #### LowestSlot
-It is the first available slot in Solana [blockstore][blockstore] that contains any data. Contains a one-byte index (deprecated) and the lowest slot number.
+The first available slot in the Solana [blockstore][blockstore] that contains any data. Contains a one-byte index (deprecated) and the lowest slot number.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -751,7 +751,7 @@ The older version of the Solana client the node is using.
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
 | `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
-| `version` | [`LegacyVersion1`](#legacyversion1) | 7 or 11 | older version of the Solana used in 1.3.x and earlier releases |
+| `version` | [`LegacyVersion1`](#legacyversion1) | 7 or 11 | older version used in 1.3.x and earlier releases |
 
 
 ##### LegacyVersion1
@@ -788,7 +788,7 @@ The version of the Solana client the node is using.
 |------|:----:|:-----:|-------------|
 | `from` | `[u8, 32]` | 32 | public key of origin |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
-| `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Solana |
+| `version` | [`LegacyVersion2`](#legacyversion2) | 11 or 15 | version of the Solana client |
 
 
 ##### LegacyVersion2
@@ -946,7 +946,7 @@ Contact info of the node.
 | `patch` | `u16`| 2 | patch |
 | `commit` | `u32 \| None`| 5 or 1 | commit |
 | `feature_set` | `u32`| 4 | feature set |
-| `client` | `u16`| 2 | client |
+| `client` | `u16`| 2 | client type: Agave, Firedancer, etc |
 
 ##### IpAddr
 | Enum ID | Data | Type | Size | Description |
