@@ -30,17 +30,16 @@ Each message contains data specific to its type, such as shared values, filters,
 
 Each message is sent in a binary form with a maximum size of 1232 bytes (1280 is a minimum `IPv6 TPU`, 40 bytes is the size of `IPv6` header and 8 bytes is the size of the fragment header). 
 
-
 Data sent in each message is serialized from a `Protocol` type, which can be one of:
 
-| Enum ID  | Message                        | Data                      | Description |
-|:--------:|--------------------------------|---------------------------|------------|
+| Enum ID  | Message                        | Data                          | Description |
+|:--------:|--------------------------------|-------------------------------|-------------|
 | 0 | [pull request](#pull-request)   | `CrdsFilter`, `CrdsValue` | sent by node to ask for new information |
-| 1 | [pull response](#pull-response) | `Pubkey`, `CrdsValuesList`   | response to a pull request |
-| 2 | [push message](#push-message)   | `Pubkey`, `CrdsValuesList`     | sent by node to share its data |
-| 3 | [prune message](#prune-message) | `Pubkey`, `PruneData`     | sent to peers with a list of origin nodes that should be pruned |
-| 4 | [ping message](#ping-message)   | `Ping`                    | sent by node to check for peers' liveliness |
-| 5 | [pong message](#pong-message)   | `Pong`                    | response to a ping (confirm liveliness) |
+| 1 | [pull response](#pull-response) | `SenderPubkey`, `CrdsValuesList` | response to a pull request |
+| 2 | [push message](#push-message)   | `SenderPubkey`, `CrdsValuesList` | sent by node to share the latest data with the cluster |
+| 3 | [prune message](#prune-message) | `SenderPubkey`, `PruneData` | sent to peers with a list of origin nodes that should be pruned |
+| 4 | [ping message](#ping-message)   | `Ping` | sent by node to check for peers' liveliness |
+| 5 | [pong message](#pong-message)   | `Pong` | response to a ping (confirm liveliness) |
 
 
 ```mermaid
@@ -136,6 +135,7 @@ Nodes send push messages to share information with others. They periodically col
 
 A node receiving a set of push messages will:
 
+* check whether the sending node has replied to a recent [`ping` message](#ping-message)
 * check for duplicate `CrdsValue`s and drop them
 * insert new `CrdsValue`s into the `crds`
 * transmit newly inserted `CrdsValue`s to their peers via push message.
@@ -143,8 +143,8 @@ A node receiving a set of push messages will:
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
-| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of values to share  |
+| `SenderPubkey` | `[u8; 32]` | 32 | a pubkey belonging to the sender of the push message |
+| `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of Crds values to share  |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -156,8 +156,9 @@ enum Protocol {
     //...
 }
 ```
-
 </details>
+
+The node shouldn't process crds values from the push message sent by node that hasn't yet replied to a recent [ping message](#ping-message).
 
 ### Pull request
 A node sends a pull request to ask the cluster for new information. It creates a set of bloom filters populated with the hashes of the `CrdsValue`s in its `crds` table and sends different bloom filters to different peers. The recipients of the pull request use the received bloom filter to identify what information the sender is missing and then construct a [pull response](#pull-response) packed with the missing `CrdsValue` data for the origin of the pull request.
@@ -165,7 +166,13 @@ A node sends a pull request to ask the cluster for new information. It creates a
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `CrdsFilter` | [`CrdsFilter`](#crdsfilter) | 37+ | a bloom filter representing `CrdsValue`s the node already has |
-| `CrdsValue` | [`CrdsValue`](#data-shared-between-nodes) | ? | a value, usually a [`LegacyContactInfo`](#legacycontactinfo) of the node that sent the pull request |
+| `ContactInfo` | [`CrdsValue`](#data-shared-between-nodes) | ? | The `crds` value containing contact info of the node that sent the pull request |
+
+The required values for the `CrdsValue` is a [`ContactInfo`](#contactinfo) or a deprecated [`LegacyContactInfo`](#legacycontactinfo-deprecated) of the node that sent the pull request. The recommended usage for this contact info is the following:
+ - Use it to check that the node is not sending a pull request to itself.
+ - Check whether the sender node responded to a `Ping` message. If the node still hasn't replied to Ping message, generate a `Ping` message for the sender node, unless the recipient node is already awaiting for the `Ping` response.
+
+The node shouldn't respond with a pull response message to node that hasn't yet replied to a recent [ping message](#ping-message).
 
 #### CrdsFilter
 
@@ -212,7 +219,7 @@ These messages are sent in response to a [pull request](#pull-request). They con
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `Pubkey` | `[u8; 32]` | 32 | a public key of the origin |
+| `SenderPubkey` | `[u8; 32]` | 32 | a pubkey belonging to the sender of the pull response message |
 | `CrdsValuesList` | [`[CrdsValue]`](#data-shared-between-nodes) | 8+ | a list of new values  |
 
 <details>
@@ -234,7 +241,7 @@ Sent to peers with a list of origin nodes that should be pruned. No more push me
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `Pubkey` | `[u8, 32]` | 32 | a public key of the origin |
+| `SenderPubkey` | `[u8, 32]` | 32 | a pubkey belonging to the sender of the prune message |
 | `PruneData` | [`PruneData`](#prunedata) | 144+ | a structure which contains prune details |
 
 
@@ -296,7 +303,6 @@ Nodes send ping messages frequently to their peers to check whether they are act
 | `token` |`[u8, 32]` | 32 | 32 bytes token |
 | `signature` |`[u8, 64]` | 64 | signature of the message |
 
-
 <details>
   <summary>Solana client Rust implementation</summary>
 
@@ -346,11 +352,11 @@ struct Pong {
 
 ## Data shared between nodes
 
-The `CrdsValue` values that are sent in push messages, pull requests, and pull responses contain the shared data and the signature of the data
+The `CrdsValue` values that are sent in push messages, pull requests, and pull responses contain the shared data and the signature of the data.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `signature` | `[u8; 64]` | 64 | signature of the origin |
+| `signature` | `[u8; 64]` | 64 | signature of the origin node that created the `CrdsValue`  |
 | `data` | [`CrdsData`](#crdsdata) | ? | data  |
 
 <details>
@@ -368,15 +374,15 @@ struct CrdsValue {
 The `CrdsData` is an enum and can be one of:
 | Enum ID | Type |
 |:-------:|------|
-| 0 | [LegacyContactInfo](#legacycontactinfo) |
+| 0 | [LegacyContactInfo](#legacycontactinfo-deprecated) (_deprecated_)  |
 | 1 | [Vote](#vote) |
 | 2 | [LowestSlot](#lowestslot) |
-| 3 | [LegacySnapshotHashes](#legacysnapshothashes-accountshashes) (_deprecated_) |
-| 4 | [AccountsHashes](#legacysnapshothashes-accountshashes) (_deprecated_) |
+| 3 | [LegacySnapshotHashes](#legacysnapshothashes-accountshashes-deprecated) (_deprecated_) |
+| 4 | [AccountsHashes](#legacysnapshothashes-accountshashes-deprecated) (_deprecated_) |
 | 5 | [EpochSlots](#epochslots) |
-| 6 | [LegacyVersion](#legacyversion) |
-| 7 | [Version](#version) |
-| 8 | [NodeInstance](#nodeinstance) |
+| 6 | [LegacyVersion](#legacyversion-deprecated) (_deprecated_) |
+| 7 | [Version](#version-deprecated) (_deprecated_)  |
+| 8 | [NodeInstance](#nodeinstance) (_almost deprecated_) |
 | 9 | [DuplicateShred](#duplicateshred) |
 | 10 | [SnapshotHashes](#snapshothashes) |
 | 11 | [ContactInfo](#contactinfo) |
@@ -406,7 +412,8 @@ enum CrdsData {
 ```
 </details>
 
-#### LegacyContactInfo
+#### LegacyContactInfo (Deprecated)
+
 Basic info about the node. Nodes send this message to introduce themselves to the cluster and provide all addresses and ports that their peers can use to communicate with them. 
 
 | Data | Type | Size | Description |
@@ -590,10 +597,10 @@ The first available slot in the Solana [blockstore][blockstore] that contains an
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `index` | `u8` | 1 | _deprecated_ | 
+| `index` | `u8` | 1 | _**The only valid value is `0u8`** since this is now a deprecated field_ | 
 | `from` | `[u8; 32]`| 32 | public key of the origin |
 | `root` | `u64` | 8 | _deprecated_ |
-| `lowest` | `u64` | 8 | the actual slot |
+| `lowest` | `u64` | 8 | the lowest slot |
 | `slots` | `[u64]` | 8+ | _deprecated_ |
 | `stash` | [`[EpochIncompleteSlots]`](#epochincompleteslots) | 8+ | _deprecated_ |
 | `wallclock` | `u64` | 8 | wallclock of the node that generated the message |
@@ -651,8 +658,9 @@ enum CompressionType {
 ```
 </details>
 
-#### LegacySnapshotHashes, AccountsHashes
-_Deprecated_
+#### LegacySnapshotHashes, AccountsHashes (Deprecated)
+
+These two messages share the same message structure.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -744,7 +752,7 @@ struct Uncompressed {
 
 </details>
 
-#### LegacyVersion
+#### LegacyVersion (Deprecated)
 The older version of the Solana client the node is using.
 
 | Data | Type | Size | Description |
@@ -781,7 +789,7 @@ struct LegacyVersion1 {
 ```
 </details>
 
-#### Version
+#### Version (Deprecated)
 The version of the Solana client the node is using.
 
 | Data | Type | Size | Description |
@@ -797,7 +805,7 @@ The version of the Solana client the node is using.
 | `major` | `u16`| 2 | major part of version |
 | `minor` | `u16`| 2 | minor part of version |
 | `patch` | `u16`| 2 | patch |
-| `commit` | `u32 \| None`| 5 or 1 | commit |
+| `commit` | `u32 \| None`| 5 or 1 | the first four bytes of the sha1 commit hash |
 | `feature_set` | `u32`| 4 | feature set |
 
 <details>
@@ -900,7 +908,7 @@ enum ShredType {
 </details>
 
 #### SnapshotHashes
-Contains hashes of full and incremental snapshots.
+Contains information about the hashes of full and incremental snapshots the node has and is ready to share with other nodes via the RPC interface. Snapshots are downloaded by other validators that are starting for the first time, or in cases where validators have fallen behind too far after a restart. To learn more, explore this [snapshots] page.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
@@ -924,19 +932,19 @@ struct SnapshotHashes {
 </details>
 
 #### ContactInfo
-Contact info of the node.
+
+Basic info about the node. Nodes send this message to introduce themselves to the cluster and provide all addresses and ports that their peers can use to communicate with them.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `pubkey` | `[u8, 32]`| 32 | public key of origin |
 | `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
-| `outset` | `u64`| 8 | timestamp when node instance was first created |
+| `outset` | `u64`| 8 | timestamp when node instance was first created, used to identify duplicate running instances |
 | `shred_version` | `u16`| 2 | the shred version the node has been configured to use |
-| `version` | [`Version`](#version-1) | 13+ | Solana version |
+| `version` | [`Version`](#version-1) | 13+ | Solana client version |
 | `addrs` | [`[IpAddr]`](#ipaddr) | 8+ | list of unique IP addresses |
 | `sockets` | [`[SocketEntry]`](#socketentry) | 8+ | list of unique sockets  |
-| `extensions` | [`[Extension]`](#extension) | 8+ | future additions to ContactInfo will be added to Extensions instead of modifying ContactInfo, currently unused |
-| `cache` | [`[SocketAddr, 12]`](#socketaddr) | 120 or 264 | cache of nodes socket addresses |
+| `extensions` | [`[Extension]`](#extension) | 8+ | future additions to `ContactInfo` will be added to `Extensions` instead of modifying `ContactInfo`, currently unused |
 
 ##### Version
 | Data | Type | Size | Description |
@@ -944,9 +952,18 @@ Contact info of the node.
 | `major` | `u16`| 2 | major part of version |
 | `minor` | `u16`| 2 | minor part of version |
 | `patch` | `u16`| 2 | patch |
-| `commit` | `u32 \| None`| 5 or 1 | commit |
-| `feature_set` | `u32`| 4 | feature set |
-| `client` | `u16`| 2 | client type: Agave, Firedancer, etc |
+| `commit` | `u32 \| None`| 5 or 1 | the first four bytes of the sha1 commit hash |
+| `feature_set` | `u32`| 4 | the first four bytes of the FeatureSet identifier |
+| `client` | `u16`| 2 | client type ID |
+
+Possible `client` type ID values are:
+
+| ID | Client |
+|:--:|--------|
+| `0u16` | `SolanaLabs` |
+| `1u16` | `JitoLabs` |
+| `2u16` | `Firedancer` |
+| `3u16` | `Agave` |
 
 ##### IpAddr
 | Enum ID | Data | Type | Size | Description |
@@ -957,12 +974,29 @@ Contact info of the node.
 ##### SocketEntry
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `key` | `u8`| 1 | protocol identifier (tvu, tpu, etc.) |
-| `index` | `u8`| 1 | IpAddr index in the addrs list |
+| `key` | `u8`| 1 | protocol identifier |
+| `index` | `u8`| 1 | [`[IpAddr]`](#ipaddr) index in the addrs list |
 | `offset` | `u16`| 2 | port offset in respect to previous entry |
 
+The list of `key` identifiers is shown in the table below:
+| Interface | Key | Description |
+|-----------|:---:|-------------|
+| `gossip` | 0 | gossip protocol address |
+| `serve_repair_quic` | 1 | `serve_repair` over QUIC |
+| `rpc` | 2 | address for JSON-RPC requests |
+| `rpc_pubsub` | 3 | websocket for JSON-RPC push notifications |
+| `serve_repair` | 4 | address for sending repair requests |
+| `tpu` | 5 | transactions address |
+| `tpu_forwards` | 6 | address to forward unprocessed transactions |
+| `tpu_forwards_quic` | 7 | `tpu_forwards` over QUIC |
+| `tpu_quic` | 8 | `tpu` over QUIC |
+| `tpu_vote` | 9 | address for sending votes |
+| `tvu` | 10 | address to connect to for replication |
+| `tvu_quic` | 11 | `tvu` over QUIC |
+| `tpu_vote_quic` | 12 | `tpu_vote` over QUIC |
+
 ##### Extension
-_Currently empty_
+_Currently empty (unused)_
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -977,7 +1011,6 @@ struct ContactInfo {
     addrs: Vec<IpAddr>,
     sockets: Vec<SocketEntry>,
     extensions: Vec<Extension>,
-    cache: [SocketAddr; 12],
 }
 
 enum Extension {}
@@ -1013,15 +1046,15 @@ struct Version {
 </details>
 
 #### RestartLastVotedForkSlots
-Contains a list of last-voted fork slots.
+Contains a list of last-voted fork slots. This message is not a common gossip message and should be used only during the [cluster-restart] operation.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
 | `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
-| `offsets` | [`SlotsOffsets`](#slotsoffsets) | 12+ | list of slots |
-| `last_voted_slot` | `u64`| 8 | last voted slot |
-| `last_voted_hash` | `[u8, 32]`| 32 | |
+| `offsets` | [`SlotsOffsets`](#slotsoffsets) | 12+ | list of slot offsets |
+| `last_voted_slot` | `u64`| 8 | the last voted slot |
+| `last_voted_hash` | `[u8, 32]`| 32 | the bank hash of the slot last voted slot |
 | `shred_version` | `u16`| 2 | the shred version node has been configured to use |
 
 ##### SlotsOffsets
@@ -1056,17 +1089,16 @@ struct RawOffsets(BitVec<u8>);
 
 
 #### RestartHeaviestFork
-Contains the heaviest fork.
+Contains the heaviest fork. This message is not a common gossip message and should be used only during the [cluster-restart] operation.
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
 | `from` | `[u8, 32]`| 32 | public key of origin |
 | `wallclock` | `u64`| 8 | wallclock of the node that generated the message |
-| `last_slot` | `u64`| 8 | last slot of the fork |
-| `last_hash` | `[u8, 32]`| 32 | hash of the last slot |
+| `last_slot` | `u64`| 8 | slot of the picked block |
+| `last_hash` | `[u8, 32]`| 32 | bank hash of the picked block |
 | `observed_stake` | `u64`| 8 | |
 | `shred_version` | `u16`| 2 | the shred version node has been configured to use |
-
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -1106,8 +1138,8 @@ IP echo server message request containing a list of ports whose reachability sho
 
 | Data | Type | Size | Description |
 |------|:----:|:----:|-------------|
-| `tcp_ports` | `[u16, 4]`| 64 | TCP ports that should be checked |
-| `udp_ports` | `[u16, 4]`| 64 | UDP ports that should be checked |
+| `tcp_ports` | `[u16, 4]` | 64 | TCP ports that should be checked |
+| `udp_ports` | `[u16, 4]` | 64 | UDP ports that should be checked |
 
 <details>
   <summary>Solana client Rust implementation</summary>
@@ -1122,6 +1154,7 @@ pub struct IpEchoServerMessage {
 </details>
 
 #### IpEchoServerResponse
+
 IP echo server message response.
 
 | Data | Type | Size | Description |
@@ -1145,3 +1178,5 @@ pub struct IpEchoServerResponse {
 
 [bincode]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
 [blockstore]: https://docs.solanalabs.com/validator/blockstore
+[snapshots]: https://docs.anza.xyz/operations/best-practices/general/#snapshots
+[cluster-restart]: https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0046-optimistic-cluster-restart-automation.md

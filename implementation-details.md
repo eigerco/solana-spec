@@ -353,9 +353,14 @@ The set of `CrdsFilter`s is then partitioned into individual `CrdsFilter`s. Each
   
 The higher the node's weight, the more pull requests will be sent to it.
 
-Each pull request contains one of the `CrdsFilter`s from the list and the requesting node's `LegacyContactInfo` as a `CrdsValue`. The node's `LegacyContactInfo` contains details of the node that sent the pull request - a list of its IP addresses, public key, and wallclock. 
+Each pull request contains one of the `CrdsFilter`s from the list and the requesting node's `ContactInfo` as a `CrdsValue`. The node's `ContactInfo` contains details of the node that sent the pull request - a list of its IP addresses, public key, and wallclock.
 
-When a node receives a pull request, it inserts the pull request value, `LegacyContactInfo`, into its `crds`, or updates the existing one in case of duplicate. Then, it checks whether the pull request comes from a valid address as a pull response needs to be sent back. Next, the node checks the pull request wallclock value - if it is not within 15 seconds of the current node's wallclock, the request is ignored. Otherwise, a node gathers its own data from the `crds` table and checks if the data it holds exists in the provided `CrdsFilter`. 
+When a node receives a pull request, before processing it further, it uses the `ContactInfo` crds value to check the following:
+- ensures the node is not sending a pull request to itself,
+- ensures the sending node has responded to a `Ping` message,
+- checks the wallclock value - if it is not within 15 seconds of the current node's wallclock, the request is ignored.
+
+Then, the node gathers its own data from the `crds` table and checks if the data it holds exists in the provided `CrdsFilter`. 
 
 As was already [explained](#crds), the `CrdsShards` structure holds a `shards` vector whose elements are index maps of `CrdsValue`s indexes in the `crds` table and their hashes. The `shards` vector allows the node to quickly find and filter out `CrdsValue`s that the pull request sender already has in its `crds`. 
 
@@ -452,6 +457,11 @@ Note: to prevent a node from DoSing a peer by constantly sending pull requests w
 ### Ping and pong messages
 
 Nodes ping their peers from time to time to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
+
+Node receiving a `Ping` message should reply with a `Pong` response, otherwise:
+- All push message sent by that node should be ignored,
+- The node shouldn't receive any push messages,
+- All pull requests sent by that node should be ignored,
 
 ### Gossip loop
 The gossip loop is an infinite loop executed by a node in a separate thread. In this loop, the node generates push messages, pull requests, and pings, while also refreshing its active set of nodes.
