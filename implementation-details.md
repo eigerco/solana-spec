@@ -459,8 +459,8 @@ Note: to prevent a node from DoSing a peer by constantly sending pull requests w
 Nodes ping their peers from time to time to see whether they are active. They create a ping message which contains a randomly generated 32-byte token. The peer receiving the ping should respond with a pong message that contains a hash of the received ping token within a certain amount of time. If the peer fails to respond, it will not receive any other message from the node who pinged it. Otherwise, the origin of the ping message will store the received pong in a cache.
 
 Node receiving a `Ping` message should reply with a `Pong` response, otherwise:
-- All push message sent by that node should be ignored,
-- The node shouldn't receive any push messages,
+- Node's contact info shall be ignored by the cluster.
+- The node shouldn't receive any push messages and pull request messages,
 - All pull requests sent by that node should be ignored,
 
 ### Gossip loop

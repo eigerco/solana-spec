@@ -158,7 +158,7 @@ enum Protocol {
 ```
 </details>
 
-The node shouldn't process crds values from the push message sent by node that hasn't yet replied to a recent [ping message](#ping-message).
+The node shouldn't process contact infos belonging to an unstaked node that hasn't yet replied to a recent [ping message](#ping-message).
 
 ### Pull request
 A node sends a pull request to ask the cluster for new information. It creates a set of bloom filters populated with the hashes of the `CrdsValue`s in its `crds` table and sends different bloom filters to different peers. The recipients of the pull request use the received bloom filter to identify what information the sender is missing and then construct a [pull response](#pull-response) packed with the missing `CrdsValue` data for the origin of the pull request.
